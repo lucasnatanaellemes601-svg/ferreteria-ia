@@ -9,43 +9,67 @@ if (!SpeechRecognition) {
 
 const recognition = new SpeechRecognition();
 recognition.lang = 'es-AR';
-recognition.interimResults = false;
-recognition.continuous = false;
+// Muestra el texto en vivo mientras hablás
+recognition.interimResults = true; 
+// Escucha de forma continua, no se apaga después de una frase
+recognition.continuous = true; 
 
-let transcriptFinal = "";
+let escuchando = false;
 
-const arrancarGrabacion = (e) => {
-  e.preventDefault();
-  transcriptFinal = "";
-  btn.classList.add('grabando');
-  btn.innerText = "🗣️ Escuchando... soltá para enviar";
-  recognition.start();
-};
-
-const frenarGrabacion = (e) => {
-  e.preventDefault();
-  btn.classList.remove('grabando');
-  btn.innerText = "⏳ Procesando...";
-  recognition.stop();
-};
-
-btn.addEventListener('mousedown', arrancarGrabacion);
-btn.addEventListener('mouseup', frenarGrabacion);
-btn.addEventListener('touchstart', arrancarGrabacion, {passive: false});
-btn.addEventListener('touchend', frenarGrabacion);
+// Con un solo clic lo prendemos para todo el día
+btn.addEventListener('click', () => {
+  if (!escuchando) {
+    recognition.start();
+    escuchando = true;
+    btn.innerText = "🔴 Escuchando de fondo... (Click para apagar)";
+    btn.classList.add('grabando');
+  } else {
+    recognition.stop();
+    escuchando = false;
+    btn.innerText = "Activar micrófono automático";
+    btn.classList.remove('grabando');
+  }
+});
 
 recognition.onresult = (event) => {
-  transcriptFinal = event.results[0][0].transcript;
-  textoEscuchado.innerText = transcriptFinal;
-  enviarAInteligencia(transcriptFinal);
+  let textoFinal = "";
+  let textoTemporal = "";
+
+  for (let i = event.resultIndex; i < event.results.length; ++i) {
+    if (event.results[i].isFinal) {
+      textoFinal += event.results[i][0].transcript;
+    } else {
+      textoTemporal += event.results[i][0].transcript;
+    }
+  }
+
+  // Muestra lo que vas diciendo en tiempo real
+  textoEscuchado.innerText = textoFinal + textoTemporal;
+
+  // Cuando hacés una pausa y la frase está completa (isFinal), la manda a la IA
+  if (textoFinal.trim() !== "") {
+     enviarAInteligencia(textoFinal);
+  }
+};
+
+// Si el navegador apaga el micrófono por inactividad, lo volvemos a prender automáticamente
+recognition.onend = () => {
+  if (escuchando) {
+    recognition.start();
+  }
 };
 
 recognition.onerror = (event) => {
-  btn.innerText = "Mantener apretado para hablar";
   console.error("Error de micrófono: ", event.error);
+  if (event.error === 'not-allowed') {
+    escuchando = false;
+    btn.innerText = "Error: Permiso denegado por el navegador";
+    btn.classList.remove('grabando');
+  }
 };
 
 async function enviarAInteligencia(texto) {
+  jsonResultado.innerText = "⏳ Procesando con IA...";
   try {
     const res = await fetch('/api/procesar', {
       method: 'POST',
@@ -58,7 +82,5 @@ async function enviarAInteligencia(texto) {
   } catch (err) {
     jsonResultado.innerText = "Error conectando con la IA.";
     console.error(err);
-  } finally {
-    btn.innerText = "Mantener apretado para hablar";
   }
 }
