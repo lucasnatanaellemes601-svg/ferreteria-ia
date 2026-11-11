@@ -1,0 +1,9 @@
+body { font-family: system-ui, -apple-system, sans-serif; background: #f4f4f5; margin: 0; padding: 20px; display: flex; justify-content: center; }
+.container { width: 100%; max-width: 600px; }
+h2 { color: #1e293b; text-align: center; }
+#ptt-btn { width: 100%; padding: 30px; font-size: 24px; background: #2563eb; color: white; border: none; border-radius: 12px; cursor: pointer; user-select: none; transition: all 0.2s; touch-action: manipulation; }
+#ptt-btn:active { background: #1d4ed8; transform: scale(0.98); }
+#ptt-btn.grabando { background: #dc2626; animation: pulse 1.5s infinite; }
+@keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.8; } 100% { opacity: 1; } }
+.caja { background: white; padding: 15px; border-radius: 8px; margin-top: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+pre { white-space: pre-wrap; word-wrap: break-word; font-size: 14px; background: #f8fafc; padding: 10px; border-radius: 6px; color: #0f172a; }

@@ -1,0 +1,11 @@
+{
+  "name": "ferreteria-ia",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vercel dev"
+  },
+  "dependencies": {
+    "@google/genai": "^3.0.0"
+  }
+}
