@@ -1,4 +1,4 @@
-// Frontend del piloto: push-to-talk + análisis con /api/procesar + medición de aciertos.
+// Frontend del piloto: micrófono automático continuo + análisis con /api/procesar + medición de aciertos.
 // JavaScript puro, sin dependencias. Todo lo que viene del servidor o del dictado
 // se pinta con textContent (nunca innerHTML).
 
@@ -50,13 +50,11 @@ function el(tag, props = {}, ...hijos) {
 }
 function setEstado(t) { $("estado").textContent = t; }
 
-// ---------- dictado (Web Speech API) ----------
+// ---------- dictado CONTINUO (Web Speech API) ----------
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let rec = null;
 let escuchando = false;
-let quiereEscuchar = false;   // true mientras el botón/tecla está apretado
-let finalTxt = "";
-let interimTxt = "";
+let autoReiniciar = false; // Mantiene el mic encendido
 let errorVoz = "";
 
 const MENSAJES_VOZ = {
@@ -64,12 +62,14 @@ const MENSAJES_VOZ = {
   "service-not-allowed": "El navegador no deja usar el dictado en esta página.",
   "audio-capture": "No encuentro un micrófono conectado.",
   "network": "El dictado necesita internet (Chrome envía el audio a Google).",
-  "no-speech": "No te escuché. Mantené apretado mientras hablás.",
+  "no-speech": "Silencio detectado. Reiniciando...",
 };
 
 function pintarBoton(activo) {
-  $("ptt").setAttribute("aria-pressed", String(activo));
-  $("ptt-texto").textContent = activo ? "Escuchando… soltá al terminar" : "Mantené para hablar";
+  const ptt = $("ptt");
+  ptt.setAttribute("aria-pressed", String(activo));
+  $("ptt-texto").textContent = activo ? "🔴 Escuchando (Clic para pausar)" : "🎤 Activar micrófono";
+  if (activo) ptt.classList.add("grabando"); else ptt.classList.remove("grabando");
 }
 
 function iniciar() {
@@ -86,79 +86,89 @@ function iniciar() {
   rec.continuous = true;
   rec.interimResults = true;
   rec.maxAlternatives = 1;
-  finalTxt = ""; interimTxt = ""; errorVoz = "";
+  errorVoz = "";
+  autoReiniciar = true;
   $("transcripcion").textContent = "";
   setEstado("");
 
   rec.onstart = () => {
     escuchando = true;
     pintarBoton(true);
-    if (!quiereEscuchar) rec.stop();   // soltó antes de que arrancara (ej. durante el permiso)
   };
+  
   rec.onresult = (ev) => {
-    interimTxt = "";
+    let textoTemporal = "";
+    let textoFinal = "";
+
     for (let i = ev.resultIndex; i < ev.results.length; i++) {
       const r = ev.results[i];
-      if (r.isFinal) finalTxt += r[0].transcript + " ";
-      else interimTxt += r[0].transcript;
+      if (r.isFinal) textoFinal += r[0].transcript + " ";
+      else textoTemporal += r[0].transcript;
     }
-    $("transcripcion").textContent = (finalTxt + interimTxt).trim();
+
+    $("transcripcion").textContent = (textoFinal + textoTemporal).trim();
+
+    // Enviar a la IA automáticamente cuando se detecta una frase terminada
+    if (textoFinal.trim() !== "") {
+      analizar(textoFinal.trim());
+    }
   };
-  rec.onerror = (ev) => { errorVoz = ev.error || "desconocido"; };
+  
+  rec.onerror = (ev) => { 
+      errorVoz = ev.error || "desconocido"; 
+      if (errorVoz === "not-allowed" || errorVoz === "service-not-allowed") {
+          autoReiniciar = false; // Apagar si no hay permisos
+      }
+  };
+  
   rec.onend = () => {
     escuchando = false;
     rec = null;
     pintarBoton(false);
-    const t = (finalTxt + interimTxt).trim();
-    if (t) { analizar(t); return; }
-    if (errorVoz === "aborted") return;
-    setEstado(MENSAJES_VOZ[errorVoz] || "No te escuché. Mantené apretado mientras hablás.");
+    
+    // Reinicio automático si no lo pausó el usuario
+    if (autoReiniciar) {
+      setTimeout(() => { if (autoReiniciar && !escuchando) iniciar(); }, 300);
+    } else if (errorVoz && errorVoz !== "aborted") {
+      setEstado(MENSAJES_VOZ[errorVoz] || "Micrófono pausado.");
+    }
   };
 
   try { rec.start(); } catch { rec = null; setEstado("No pude iniciar el micrófono. Probá de nuevo."); }
 }
-function detener() { if (rec && escuchando) rec.stop(); }
-function presionar() { quiereEscuchar = true; iniciar(); }
-function soltar() { quiereEscuchar = false; detener(); }
 
+function detener() { 
+    autoReiniciar = false; 
+    if (rec && escuchando) rec.stop(); 
+}
+
+// Botón: prende y apaga con un solo clic
 const ptt = $("ptt");
-ptt.addEventListener("pointerdown", (e) => { e.preventDefault(); ptt.setPointerCapture(e.pointerId); presionar(); });
-ptt.addEventListener("pointerup", soltar);
-ptt.addEventListener("pointercancel", soltar);
-ptt.addEventListener("contextmenu", (e) => e.preventDefault());
-
-const escribiendo = (t) => t instanceof HTMLElement && (t.matches("input, textarea, select") || t.isContentEditable);
-document.addEventListener("keydown", (e) => {
-  if (e.code !== "Space" || e.repeat || escribiendo(e.target)) return;
-  e.preventDefault();
-  presionar();
-});
-document.addEventListener("keyup", (e) => {
-  if (e.code !== "Space" || escribiendo(e.target)) return;
-  e.preventDefault();
-  soltar();
+ptt.addEventListener("click", (e) => { 
+    e.preventDefault(); 
+    if (escuchando || autoReiniciar) detener(); 
+    else iniciar(); 
 });
 
 // ---------- llamada al backend ----------
 const MENSAJES_API = {
   pin_incorrecto: "PIN incorrecto. Probá de nuevo.",
-  login_requerido: "El servidor exige iniciar sesión (Supabase) y esta pantalla todavía no tiene login. Es la Fase 2: hasta entonces dejá vacías SUPABASE_URL y SUPABASE_ANON_KEY en Vercel.",
-  sesion_invalida: "El servidor exige iniciar sesión (Supabase) y esta pantalla todavía no tiene login. Es la Fase 2.",
-  servidor_sin_configurar: "Falta configurar el servidor (GEMINI_API_KEY y APP_PIN en Vercel).",
+  login_requerido: "El servidor exige iniciar sesión (Supabase). Fase 2.",
+  sesion_invalida: "Sesión inválida de Supabase. Fase 2.",
+  servidor_sin_configurar: "Falta configurar el servidor en Vercel.",
   cuota_ia_agotada: "Se agotó la cuota de Gemini por ahora. Probá en un rato.",
-  texto_invalido: "El texto es muy corto o muy largo (máximo 500 caracteres).",
+  texto_invalido: "El texto es muy corto o muy largo.",
   respuesta_ia_invalida: "La IA devolvió algo que no pude leer. Probá de nuevo.",
   ia_no_disponible: "La IA no respondió. Probá de nuevo en un momento.",
 };
 
 async function analizar(textoCrudo) {
   const texto = textoCrudo.replace(/\s+/g, " ").trim();
-  if (texto.length < 2) { setEstado("No te escuché, probá de nuevo."); return; }
+  if (texto.length < 2) return;
   if (!pin) { textoPendiente = texto; mostrarPin(); setEstado("Primero ingresá el PIN."); return; }
 
   analizando = true;
-  ptt.disabled = true;
-  setEstado("Analizando…");
+  setEstado("Analizando con IA…");
   try {
     const r = await fetch(API, {
       method: "POST",
@@ -172,17 +182,16 @@ async function analizar(textoCrudo) {
       return;
     }
     if (!Array.isArray(data.items)) { setEstado("Respuesta inesperada del servidor."); return; }
+    
     registrar(texto, data.items);
-    $("transcripcion").textContent = "";
-    setEstado(data.items.length ? "Listo. Revisá el resultado." : "No detecté productos (charla o ruido).");
+    $("transcripcion").textContent = ""; // Limpiar para escuchar la siguiente frase
+    setEstado(data.items.length ? "Listo. Revisá el resultado." : "No detecté productos.");
   } catch {
-    // Sin conexión: el texto queda a mano para reintentar sin volver a dictar.
     $("texto-manual").value = texto;
     $("manual").open = true;
     setEstado("Sin conexión con el servidor. Dejé tu texto abajo para reintentar.");
   } finally {
     analizando = false;
-    ptt.disabled = false;
   }
 }
 
@@ -250,7 +259,7 @@ function render() {
   lista.replaceChildren(
     ...(log.length
       ? log.slice(0, MAX_VISIBLES).map(pintarEntrada)
-      : [el("p", { class: "vacio" }, "Todavía no hay dictados. Mantené apretado el botón y hablá.")]),
+      : [el("p", { class: "vacio" }, "Todavía no hay dictados. Hacé clic en Activar Micrófono.")]),
   );
 
   const evaluadas = log.filter((e) => e.veredicto);
@@ -261,7 +270,7 @@ function render() {
   } else {
     const pct = Math.round((bien / evaluadas.length) * 100);
     txt = `${bien} de ${evaluadas.length} salieron bien (${pct} %). Objetivo: ${OBJETIVO} %.`;
-    if (evaluadas.length < MUESTRA_MINIMA) txt += ` Faltan ${MUESTRA_MINIMA - evaluadas.length} frases para una muestra confiable.`;
+    if (evaluadas.length < MUESTRA_MINIMA) txt += ` Faltan ${MUESTRA_MINIMA - evaluadas.length} frases.`;
     else txt += pct >= OBJETIVO ? " Objetivo alcanzado." : " Todavía por debajo del objetivo.";
   }
   $("stats").textContent = txt;
@@ -270,13 +279,13 @@ function render() {
 // ---------- exportar ----------
 function celdaCsv(v) {
   let s = String(v ?? "");
-  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;    // evita fórmulas al abrirlo en Excel
+  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;    
   return `"${s.replace(/"/g, '""')}"`;
 }
 function descargarCsv() {
   const filas = [["fecha", "texto", "veredicto", "items_json"]];
   for (const e of [...log].reverse()) filas.push([e.ts, e.texto, e.veredicto ?? "", JSON.stringify(e.items)]);
-  const csv = "﻿" + filas.map((f) => f.map(celdaCsv).join(",")).join("\r\n");
+  const csv = "\uFEFF" + filas.map((f) => f.map(celdaCsv).join(",")).join("\r\n");
   const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
   const a = el("a", { href: url, download: `piloto-ferreteria-${new Date().toISOString().slice(0, 10)}.csv` });
   document.body.append(a);
