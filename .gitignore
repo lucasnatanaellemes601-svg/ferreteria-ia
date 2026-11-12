@@ -1,5 +1,19 @@
+# Secretos: nunca al repositorio
+.env
+.env.*
+!.env.example
+
+# Dependencias y builds
 node_modules/
-.env.local
 .vercel/
+
+# Sistema y editores
 .DS_Store
-.vercel
+Thumbs.db
+*.log
+.vscode/*
+!.vscode/extensions.json
+
+# Archivos temporales de pruebas
+*.tmp
+coverage/

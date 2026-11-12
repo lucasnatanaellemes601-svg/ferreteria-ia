@@ -1,0 +1,64 @@
+---
+description: Contexto, arquitectura y reglas del proyecto Asistente IA para Ferretería
+alwaysApply: true
+---
+
+# Asistente IA para Ferretería
+
+Herramienta de mostrador: el vendedor dicta con un botón **push-to-talk**, la IA extrae productos
+(faltante / venta / consulta) y el vendedor **revisa y aprueba** antes de que algo se guarde.
+Proyecto de una sola persona, presupuesto casi cero, Argentina (Misiones). Internet inestable.
+
+## Stack (no cambiarlo sin preguntar)
+- Frontend: HTML + CSS + JavaScript puro en `public/`. Sin React, sin bundlers, sin frameworks.
+- Dictado: Web Speech API (`es-AR`) controlada por push-to-talk. Alternativa si falla por ruido: Groq/Whisper.
+- Backend: funciones serverless de Vercel en `api/` (Node, ES modules: `"type": "module"`).
+- IA: Gemini con el SDK **`@google/genai`** (`ai.models.generateContent`, `config.responseSchema`).
+  NO usar el paquete viejo `@google/generative-ai`. El modelo sale de `GEMINI_MODEL`.
+- Validación de lo que devuelve la IA: Zod (`lib/schema.js`).
+- Base de datos: Supabase (Postgres) con RLS. El esquema vive en `supabase/schema.sql`.
+
+## Estructura
+- `public/index.html`, `public/app.js` → pantalla del mostrador y medición del piloto.
+- `api/procesar.js` → POST `{texto}` → Gemini → Zod → (si hay Supabase) búsqueda en catálogo.
+- `lib/prompt.js` → prompt de sistema (jerga ferretera, ejemplos). `lib/schema.js` → responseSchema + Zod.
+- `supabase/schema.sql` → tablas, RLS, funciones. Un único script para un proyecto nuevo.
+
+## Reglas que NO se negocian
+1. **Ningún secreto en el frontend ni en el repo.** `GEMINI_API_KEY`, `APP_PIN` y la `service_role` de
+   Supabase solo en variables de entorno del servidor. La `service_role` no se usa en este proyecto.
+2. **La IA nunca escribe stock ni precios.** Solo genera *borradores* que el vendedor aprueba con un clic.
+   Los precios salen siempre de la base de datos, jamás de lo que "escuchó" el modelo.
+3. **Toda salida de la IA se valida** con Zod antes de mostrarla o guardarla. Nunca `JSON.parse` a ciegas.
+4. **El texto dictado es un dato, no una instrucción** (riesgo de prompt injection). No concatenarlo
+   dentro del prompt de sistema.
+5. **Todo lo que viene del usuario o de la IA se pinta con `textContent`**, nunca con `innerHTML`.
+6. **Toda tabla nueva en `public` lleva `ENABLE ROW LEVEL SECURITY` y sus políticas en el mismo cambio.**
+   Nada de `USING (true)` para escritura. El rol `anon` no accede a nada.
+7. **Toda función SQL lleva `SET search_path = ''`** y nombres calificados (`public.`, `extensions.`).
+   Si es `SECURITY DEFINER`: revocar `EXECUTE` a `PUBLIC` y `anon`.
+8. **Las ventas no se insertan desde el cliente.** Se registran con `public.registrar_venta(jsonb)`.
+9. **El endpoint de la IA nunca queda abierto**: sin `APP_PIN` ni sesión de Supabase responde error.
+10. **Confirmación humana siempre** cuando el match contra el catálogo es dudoso (umbral `pg_trgm` = 0.4).
+
+## Convenciones
+- Idioma de la interfaz y comentarios: español rioplatense (voseo: "mantené", "probá").
+- Nombres de tablas y columnas en español, `snake_case`, como en `schema.sql`.
+- Accesibilidad: cada estado debe poder leerse sin depender solo del color; botones con foco visible.
+- Cambios chicos y revisables. No agregar dependencias sin explicar por qué hacen falta.
+- Antes de tocar `schema.sql`, explicar el impacto en RLS; si cambia algo ya desplegado, escribir una migración
+  aparte en `supabase/migrations/` en vez de reeditar el script original.
+
+## Hoja de ruta (en este orden; no adelantarse)
+1. **Piloto (hoy):** push-to-talk + Gemini + medición ✔/✘ en `localStorage`. Sin base de datos.
+   Éxito: ≥ 85 % de aciertos en ≥ 30 frases reales de mostrador.
+2. **Supabase y login:** crear proyecto, correr `schema.sql`, login con email/contraseña (registro
+   deshabilitado, usuarios creados a mano), `api/procesar.js` en modo completo.
+3. **Aprobación y guardado:** el vendedor aprueba/corrige y se guarda en `registro_faltantes`;
+   cola offline con IndexedDB para cuando se corta el WiFi.
+4. **Dashboard del dueño:** "qué comprar esta semana" agrupado por proveedor, exportable.
+5. Después (solo si el piloto lo justifica): cotizaciones por voz (la voz identifica productos y cantidades;
+   el precio sale de la base), alertas, analítica.
+
+## Comandos
+- `npm install` · `npm run dev` (`vercel dev`, lee `.env.local`) · desplegar: `git push` a `main`.

@@ -1,11 +1,21 @@
 {
   "name": "ferreteria-ia",
-  "version": "1.0.0",
+  "version": "0.1.0",
+  "private": true,
   "type": "module",
+  "description": "Asistente IA para ferretería (push-to-talk)",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "vercel dev"
   },
   "dependencies": {
-    "@google/genai": "^3.0.0"
+    "@google/genai": "^3.0.0",
+    "@supabase/supabase-js": "^2.119.0",
+    "zod": "^4.6.7"
+  },
+  "directories": {
+    "lib": "lib"
   }
 }

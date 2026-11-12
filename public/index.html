@@ -1,26 +1,130 @@
-<!DOCTYPE html>
-<html lang="es">
+<!doctype html>
+<html lang="es-AR">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Ferretería IA - Push to Talk</title>
-  <link rel="stylesheet" href="styles.css">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Asistente de mostrador</title>
+  <style>
+    :root {
+      --bg: #f6f5f2; --fg: #1d1d1b; --muted: #6a6862; --card: #ffffff; --line: #dcd9d1;
+      --accent: #c2410c; --accent-fg: #ffffff;
+      --ok: #166534; --warn: #92400e; --bad: #991b1b;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #161614; --fg: #f1efe9; --muted: #a09d94; --card: #201f1d; --line: #34322e;
+        --accent: #ea580c; --accent-fg: #ffffff;
+        --ok: #4ade80; --warn: #fbbf24; --bad: #f87171;
+      }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    header, main, footer { max-width: 720px; margin: 0 auto; padding: 0 16px; }
+    header { padding-top: 24px; }
+    h1 { font-size: 1.4rem; margin: 0 0 4px; }
+    h2 { font-size: 1.05rem; margin: 28px 0 10px; }
+    .sub, .muted { color: var(--muted); margin: 0; }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+    button, input, textarea { font: inherit; color: inherit; }
+    button { cursor: pointer; border: 1px solid var(--line); background: var(--card); border-radius: 8px; padding: 8px 12px; }
+    button:hover { border-color: var(--muted); }
+    button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+    button[aria-pressed="true"] { border-color: var(--fg); font-weight: 600; }
+    input, textarea { width: 100%; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+
+    .ptt { display: flex; flex-direction: column; align-items: center; gap: 10px; margin-top: 24px; }
+    #ptt {
+      width: 150px; height: 150px; border-radius: 50%; border: 0; background: var(--accent); color: var(--accent-fg);
+      font-size: 1.05rem; font-weight: 600; line-height: 1.25; padding: 16px;
+      touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+    }
+    #ptt[aria-pressed="true"] { background: var(--fg); color: var(--bg); box-shadow: 0 0 0 8px var(--accent); }
+    #ptt:disabled { opacity: .5; cursor: progress; }
+    #estado { min-height: 1.5em; margin: 0; text-align: center; font-weight: 500; }
+    #transcripcion { min-height: 1.5em; margin: 0; text-align: center; color: var(--muted); font-style: italic; }
+
+    details { margin-top: 16px; }
+    summary { cursor: pointer; color: var(--muted); }
+    form.fila { display: flex; gap: 8px; margin-top: 8px; align-items: flex-start; }
+    form.fila textarea { flex: 1; resize: vertical; }
+
+    .entrada { margin-bottom: 12px; }
+    .entrada .cabecera { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); font-size: .85rem; }
+    .entrada blockquote { margin: 6px 0 10px; padding-left: 10px; border-left: 3px solid var(--line); }
+    ul.items { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+    .item { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
+    .badge { font-size: .75rem; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; border: 1.5px solid currentColor; border-radius: 999px; padding: 0 8px; }
+    .i-faltante .badge { color: var(--bad); }
+    .i-venta .badge { color: var(--ok); }
+    .i-consulta .badge { color: var(--muted); }
+    .revisar { color: var(--warn); font-weight: 700; font-size: .85rem; }
+    .linea { flex-basis: 100%; font-size: .9rem; color: var(--muted); }
+    .vacio { color: var(--muted); font-style: italic; margin: 0; }
+    .veredicto { display: flex; gap: 8px; align-items: center; margin-top: 10px; font-size: .9rem; }
+
+    .acciones { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+    #pin-box { margin-top: 20px; }
+    #pin-box label { display: block; font-weight: 600; margin-bottom: 6px; }
+    footer { padding: 28px 16px 40px; color: var(--muted); font-size: .85rem; }
+    [hidden] { display: none !important; }
+    @media (prefers-reduced-motion: no-preference) { #ptt { transition: box-shadow .12s, background .12s; } }
+  </style>
 </head>
 <body>
-  <div class="container">
-    <h2>🎤 Asistente de Mostrador</h2>
-    <button id="ptt-btn">Mantener apretado para hablar</button>
-    
-    <div class="caja">
-      <strong>🎙️ Escuchado:</strong>
-      <p id="texto-escuchado">Esperando audio...</p>
-    </div>
+  <header>
+    <h1>Asistente de mostrador</h1>
+    <p class="sub">Mantené apretado el botón (o la barra espaciadora), dictá y soltá.</p>
+  </header>
 
-    <div class="caja">
-      <strong>🤖 IA Detectó:</strong>
-      <pre id="json-resultado">Aún no hay datos.</pre>
-    </div>
-  </div>
-  <script src="app.js"></script>
+  <main>
+    <section id="pin-box" class="card" hidden>
+      <form id="form-pin">
+        <label for="pin">PIN de acceso</label>
+        <div class="fila" style="display:flex;gap:8px">
+          <input id="pin" type="password" autocomplete="off" required>
+          <button type="submit">Guardar</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="ptt" aria-label="Dictado">
+      <button id="ptt" type="button" aria-pressed="false"><span id="ptt-texto">Mantené para hablar</span></button>
+      <p id="estado" role="status" aria-live="polite"></p>
+      <p id="transcripcion" aria-live="polite"></p>
+    </section>
+
+    <details id="manual">
+      <summary>Escribir en lugar de hablar (para probar o reintentar)</summary>
+      <form id="form-texto" class="fila">
+        <label for="texto-manual" hidden>Texto a analizar</label>
+        <textarea id="texto-manual" rows="2" maxlength="500" placeholder="Ej: no hay mechas de widia del 6, le di del 8 y se la llevó"></textarea>
+        <button type="submit">Analizar</button>
+      </form>
+    </details>
+
+    <section aria-label="Resultados">
+      <h2>Resultados</h2>
+      <div id="lista" aria-live="polite"></div>
+    </section>
+
+    <section aria-label="Medición del piloto">
+      <h2>Medición del piloto</h2>
+      <div class="card">
+        <p id="stats" style="margin:0"></p>
+        <div class="acciones">
+          <button id="csv" type="button">Descargar CSV</button>
+          <button id="cambiar-pin" type="button">Cambiar PIN</button>
+          <button id="borrar" type="button">Borrar historial</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    El micrófono solo escucha mientras mantenés apretado el botón. En Chrome y Edge, el dictado se procesa en servidores de Google y el texto se analiza con Gemini: avisá en el local que se usa esta herramienta.
+  </footer>
+
+  <script type="module" src="app.js"></script>
 </body>
 </html>
