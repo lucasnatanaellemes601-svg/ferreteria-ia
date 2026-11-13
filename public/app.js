@@ -13,13 +13,22 @@ const OBJETIVO = 85;          // % de aciertos que pide el piloto
 
 const $ = (id) => document.getElementById(id);
 
-// ---------- PALABRAS CLAVE DEL PORTERO (Filtro Inteligente) ----------
+// ---------- PALABRAS CLAVE DEL PORTERO (Filtro por Intención Comercial) ----------
 const PALABRAS_CLAVE = [
-  "no hay", "no tengo", "no me quedan", "se terminó", "falta", "sin stock",
-  "se llevó", "vendí", "dame", "cuánto sale", "presupuesto", "cotizame", "tienen",
-  "del 8", "pulgadas", "bolsas", "metros", "kilos", "litros", 
-  "clavo", "tornillo", "mecha", "cemento", "poxiran", "poxipol", "cable",
-  "tuerca", "arandela", "tarugo", "llevo", "buscaba", "necesito", "precio", "cuánto"
+  // 1. Faltantes y stock (El vendedor niega o avisa que falta)
+  "no hay", "no tengo", "no me quedan", "se terminó", "falta", "faltó", "sin stock", "agotado", "no quedó",
+  
+  // 2. Transacciones (El vendedor confirma)
+  "vendí", "se llevó", "le cobré", "le di", "facturé",
+  
+  // 3. Pedidos (El cliente pide)
+  "dame", "me das", "tenés", "tienen", "busco", "buscaba", "necesito", "quiero", "llevo", "me llevo", "te pido",
+  
+  // 4. Consultas de plata
+  "cuánto", "precio", "sale", "vale", "presupuesto", "cotizame", "cobrame",
+  
+  // 5. Unidades y envases (Casi todo en ferretería va acompañado de esto)
+  "kilo", "metro", "litro", "bolsa", "caja", "paquete", "unidad", "pulgada", "milímetro", "centímetro", "docena", "par", "lata", "pomo"
 ];
 
 // ---------- ALMACENAMIENTO ----------
