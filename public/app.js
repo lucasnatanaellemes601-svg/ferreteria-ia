@@ -1,4 +1,4 @@
-// Frontend del piloto: micrófono automático continuo + análisis con /api/procesar + medición de aciertos.
+// Frontend del piloto: MODO DUAL (Manual / Automático con Portero Local)
 // JavaScript puro, sin dependencias. Todo lo que viene del servidor o del dictado
 // se pinta con textContent (nunca innerHTML).
 
@@ -13,7 +13,16 @@ const OBJETIVO = 85;          // % de aciertos que pide el piloto
 
 const $ = (id) => document.getElementById(id);
 
-// ---------- almacenamiento (puede fallar en modo privado) ----------
+// ---------- PALABRAS CLAVE DEL PORTERO (Filtro Inteligente) ----------
+const PALABRAS_CLAVE = [
+  "no hay", "no tengo", "no me quedan", "se terminó", "falta", "sin stock",
+  "se llevó", "vendí", "dame", "cuánto sale", "presupuesto", "cotizame", "tienen",
+  "del 8", "pulgadas", "bolsas", "metros", "kilos", "litros", 
+  "clavo", "tornillo", "mecha", "cemento", "poxiran", "poxipol", "cable",
+  "tuerca", "arandela", "tarugo", "llevo", "buscaba", "necesito", "precio", "cuánto"
+];
+
+// ---------- ALMACENAMIENTO ----------
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch { return null; } },
   set(k, v) { try { localStorage.setItem(k, v); return true; } catch { return false; } },
@@ -33,11 +42,11 @@ function cargarLog() {
 }
 function guardarLog() {
   if (!store.set(LS_LOG, JSON.stringify(log))) {
-    setEstado("No pude guardar el historial en este navegador (¿modo privado?). Descargá el CSV antes de cerrar.");
+    setEstado("No pude guardar el historial. Descargá el CSV antes de cerrar.");
   }
 }
 
-// ---------- helpers de DOM ----------
+// ---------- HELPERS DE DOM ----------
 function el(tag, props = {}, ...hijos) {
   const n = document.createElement(tag);
   for (const [k, v] of Object.entries(props)) {
@@ -50,32 +59,52 @@ function el(tag, props = {}, ...hijos) {
 }
 function setEstado(t) { $("estado").textContent = t; }
 
-// ---------- dictado CONTINUO (Web Speech API) ----------
+// ---------- INYECTAR INTERRUPTOR DUAL ----------
+const ptt = $("ptt");
+let modoAuto = false;
+
+const toggleDiv = el("div", { style: "display: flex; gap: 15px; justify-content: center; align-items: center; margin-bottom: 25px; padding: 12px; background: rgba(255,255,255,0.03); border-radius: 12px; border: 1px solid #333;" },
+  el("span", { style: "color: #bbb; font-weight: bold; font-size: 0.9em;" }, "👆 Modo Manual"),
+  el("input", { type: "checkbox", id: "switch-modo", style: "width: 45px; height: 25px; cursor: pointer; accent-color: #f97316;" }),
+  el("span", { style: "color: #bbb; font-weight: bold; font-size: 0.9em;" }, "🤖 Modo Inteligente (Portero)")
+);
+ptt.parentNode.insertBefore(toggleDiv, ptt);
+
+$("switch-modo").addEventListener("change", (e) => {
+  modoAuto = e.target.checked;
+  detener();
+  pintarBoton(false);
+  $("transcripcion").textContent = "";
+  setEstado(modoAuto 
+    ? "Modo inteligente activo. Hacé clic en el botón para que escuche de fondo." 
+    : "Modo manual activo. Mantené apretado el botón mientras hablás.");
+});
+
+// ---------- DICTADO DUAL (Web Speech API) ----------
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let rec = null;
 let escuchando = false;
-let autoReiniciar = false; // Mantiene el mic encendido
+let quiereEscuchar = false; // Flag para modo manual
+let autoReiniciar = false;  // Flag para modo auto
+let finalTxt = "";
+let interimTxt = "";
 let errorVoz = "";
 
-const MENSAJES_VOZ = {
-  "not-allowed": "Permití el micrófono en el navegador y probá de nuevo.",
-  "service-not-allowed": "El navegador no deja usar el dictado en esta página.",
-  "audio-capture": "No encuentro un micrófono conectado.",
-  "network": "El dictado necesita internet (Chrome envía el audio a Google).",
-  "no-speech": "Silencio detectado. Reiniciando...",
-};
-
 function pintarBoton(activo) {
-  const ptt = $("ptt");
   ptt.setAttribute("aria-pressed", String(activo));
-  $("ptt-texto").textContent = activo ? "🔴 Escuchando (Clic para pausar)" : "🎤 Activar micrófono";
-  if (activo) ptt.classList.add("grabando"); else ptt.classList.remove("grabando");
+  if (modoAuto) {
+    $("ptt-texto").textContent = activo ? "🔴 Escuchando (Clic para pausar)" : "🎤 Activar micrófono inteligente";
+    if (activo) ptt.classList.add("grabando"); else ptt.classList.remove("grabando");
+  } else {
+    $("ptt-texto").textContent = activo ? "Escuchando... soltá al terminar" : "Mantené apretado para hablar";
+    ptt.classList.remove("grabando");
+  }
 }
 
 function iniciar() {
   if (escuchando || rec || analizando) return;
   if (!SR) {
-    setEstado("Este navegador no tiene dictado. Usá Chrome o Edge, o escribí abajo.");
+    setEstado("Navegador sin soporte de voz. Usá Chrome o Edge.");
     $("manual").open = true;
     return;
   }
@@ -86,82 +115,123 @@ function iniciar() {
   rec.continuous = true;
   rec.interimResults = true;
   rec.maxAlternatives = 1;
-  errorVoz = "";
-  autoReiniciar = true;
+  finalTxt = ""; interimTxt = ""; errorVoz = "";
   $("transcripcion").textContent = "";
   setEstado("");
 
   rec.onstart = () => {
     escuchando = true;
     pintarBoton(true);
+    if (!modoAuto && !quiereEscuchar) rec.stop(); // Soltó rápido en modo manual
   };
-  
+
   rec.onresult = (ev) => {
-    let textoTemporal = "";
-    let textoFinal = "";
-
-    for (let i = ev.resultIndex; i < ev.results.length; i++) {
-      const r = ev.results[i];
-      if (r.isFinal) textoFinal += r[0].transcript + " ";
-      else textoTemporal += r[0].transcript;
-    }
-
-    $("transcripcion").textContent = (textoFinal + textoTemporal).trim();
-
-    // Enviar a la IA automáticamente cuando se detecta una frase terminada
-    if (textoFinal.trim() !== "") {
-      analizar(textoFinal.trim());
-    }
-  };
-  
-  rec.onerror = (ev) => { 
-      errorVoz = ev.error || "desconocido"; 
-      if (errorVoz === "not-allowed" || errorVoz === "service-not-allowed") {
-          autoReiniciar = false; // Apagar si no hay permisos
+    if (!modoAuto) {
+      // Comportamiento Manual
+      interimTxt = "";
+      for (let i = ev.resultIndex; i < ev.results.length; i++) {
+        if (ev.results[i].isFinal) finalTxt += ev.results[i][0].transcript + " ";
+        else interimTxt += ev.results[i][0].transcript;
       }
+      $("transcripcion").textContent = (finalTxt + interimTxt).trim();
+    } else {
+      // Comportamiento Auto/Portero
+      let tTemp = ""; let tFinal = "";
+      for (let i = ev.resultIndex; i < ev.results.length; i++) {
+        if (ev.results[i].isFinal) tFinal += ev.results[i][0].transcript + " ";
+        else tTemp += ev.results[i][0].transcript;
+      }
+      $("transcripcion").textContent = (tFinal + tTemp).trim();
+      
+      // Cuando hay una frase final, se la pasamos al portero
+      if (tFinal.trim() !== "") {
+        evaluarPortero(tFinal.trim());
+      }
+    }
   };
-  
+
+  rec.onerror = (ev) => { 
+    errorVoz = ev.error || "desconocido"; 
+    if (errorVoz === "not-allowed" || errorVoz === "service-not-allowed") {
+      autoReiniciar = false; 
+    }
+  };
+
   rec.onend = () => {
     escuchando = false;
     rec = null;
     pintarBoton(false);
     
-    // Reinicio automático si no lo pausó el usuario
-    if (autoReiniciar) {
-      setTimeout(() => { if (autoReiniciar && !escuchando) iniciar(); }, 300);
-    } else if (errorVoz && errorVoz !== "aborted") {
-      setEstado(MENSAJES_VOZ[errorVoz] || "Micrófono pausado.");
+    if (!modoAuto) {
+      // En manual, al terminar manda lo que acumuló directo a IA
+      const t = (finalTxt + interimTxt).trim();
+      if (t) analizar(t);
+      else if (errorVoz && errorVoz !== "aborted") setEstado("No te escuché. Mantené apretado mientras hablás.");
+    } else {
+      // En auto, si no lo pausó el usuario, reinicia para seguir escuchando
+      if (autoReiniciar) {
+        setTimeout(() => { if (autoReiniciar && !escuchando) iniciar(); }, 300);
+      } else if (errorVoz && errorVoz !== "aborted") {
+        setEstado("Micrófono pausado.");
+      }
     }
   };
 
-  try { rec.start(); } catch { rec = null; setEstado("No pude iniciar el micrófono. Probá de nuevo."); }
+  try { rec.start(); } catch { rec = null; setEstado("No pude iniciar el micrófono."); }
 }
 
 function detener() { 
-    autoReiniciar = false; 
-    if (rec && escuchando) rec.stop(); 
+  autoReiniciar = false; 
+  quiereEscuchar = false;
+  if (rec && escuchando) rec.stop(); 
 }
 
-// Botón: prende y apaga con un solo clic
-const ptt = $("ptt");
-ptt.addEventListener("click", (e) => { 
-    e.preventDefault(); 
-    if (escuchando || autoReiniciar) detener(); 
-    else iniciar(); 
+// ----- EVENTOS DEL BOTÓN -----
+// Para el Modo Manual (Mantiene apretado)
+ptt.addEventListener("pointerdown", (e) => { 
+  if (modoAuto || e.button !== 0) return; // Si es auto o click derecho, ignora
+  e.preventDefault(); 
+  ptt.setPointerCapture(e.pointerId); 
+  quiereEscuchar = true; 
+  iniciar(); 
+});
+ptt.addEventListener("pointerup", () => { if (!modoAuto) { quiereEscuchar = false; detener(); } });
+ptt.addEventListener("pointercancel", () => { if (!modoAuto) { quiereEscuchar = false; detener(); } });
+
+// Para el Modo Auto (Un solo clic)
+ptt.addEventListener("click", (e) => {
+  if (!modoAuto) return;
+  e.preventDefault();
+  if (escuchando || autoReiniciar) detener(); 
+  else { autoReiniciar = true; iniciar(); }
 });
 
-// ---------- llamada al backend ----------
-const MENSAJES_API = {
-  pin_incorrecto: "PIN incorrecto. Probá de nuevo.",
-  login_requerido: "El servidor exige iniciar sesión (Supabase). Fase 2.",
-  sesion_invalida: "Sesión inválida de Supabase. Fase 2.",
-  servidor_sin_configurar: "Falta configurar el servidor en Vercel.",
-  cuota_ia_agotada: "Se agotó la cuota de Gemini por ahora. Probá en un rato.",
-  texto_invalido: "El texto es muy corto o muy largo.",
-  respuesta_ia_invalida: "La IA devolvió algo que no pude leer. Probá de nuevo.",
-  ia_no_disponible: "La IA no respondió. Probá de nuevo en un momento.",
-};
+// Soporte barra espaciadora
+document.addEventListener("keydown", (e) => {
+  if (e.code !== "Space" || e.repeat || e.target.matches("input, textarea")) return;
+  e.preventDefault();
+  if (!modoAuto) { quiereEscuchar = true; iniciar(); }
+});
+document.addEventListener("keyup", (e) => {
+  if (e.code !== "Space" || e.target.matches("input, textarea")) return;
+  e.preventDefault();
+  if (!modoAuto) { quiereEscuchar = false; detener(); }
+  else { if (escuchando || autoReiniciar) detener(); else { autoReiniciar = true; iniciar(); } }
+});
 
+// ---------- EL PORTERO LOCAL ----------
+function evaluarPortero(texto) {
+  const txt = texto.toLowerCase();
+  const pasaFiltro = PALABRAS_CLAVE.some(p => txt.includes(p));
+
+  if (pasaFiltro) {
+    analizar(texto); // Manda a la IA
+  } else {
+    registrarDescartado(texto); // Lo guarda como basura
+  }
+}
+
+// ---------- LLAMADA AL BACKEND ----------
 async function analizar(textoCrudo) {
   const texto = textoCrudo.replace(/\s+/g, " ").trim();
   if (texto.length < 2) return;
@@ -178,13 +248,13 @@ async function analizar(textoCrudo) {
     const data = await r.json().catch(() => ({}));
     if (!r.ok) {
       if (data.error === "pin_incorrecto") { pin = ""; store.del(LS_PIN); textoPendiente = texto; mostrarPin(); }
-      setEstado(MENSAJES_API[data.error] || `Error del servidor (${r.status}).`);
+      setEstado(`Error del servidor (${r.status}).`);
       return;
     }
     if (!Array.isArray(data.items)) { setEstado("Respuesta inesperada del servidor."); return; }
     
     registrar(texto, data.items);
-    $("transcripcion").textContent = ""; // Limpiar para escuchar la siguiente frase
+    $("transcripcion").textContent = ""; 
     setEstado(data.items.length ? "Listo. Revisá el resultado." : "No detecté productos.");
   } catch {
     $("texto-manual").value = texto;
@@ -195,21 +265,26 @@ async function analizar(textoCrudo) {
   }
 }
 
-// ---------- historial y medición ----------
+// ---------- HISTORIAL Y MEDICIÓN ----------
 function registrar(texto, items) {
-  const id = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  log.unshift({ id, ts: new Date().toISOString(), texto, items, veredicto: null });
+  const id = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-ok`;
+  log.unshift({ id, ts: new Date().toISOString(), texto, items, veredicto: null, descartado: false });
   if (log.length > MAX_LOG) log.length = MAX_LOG;
-  guardarLog();
-  render();
+  guardarLog(); render();
+}
+
+function registrarDescartado(texto) {
+  const id = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-basura`;
+  log.unshift({ id, ts: new Date().toISOString(), texto, items: [], veredicto: null, descartado: true });
+  if (log.length > MAX_LOG) log.length = MAX_LOG;
+  guardarLog(); render();
 }
 
 function marcar(id, valor) {
   const e = log.find((x) => x.id === id);
   if (!e) return;
-  e.veredicto = e.veredicto === valor ? null : valor;   // tocar de nuevo = deshacer
-  guardarLog();
-  render();
+  e.veredicto = e.veredicto === valor ? null : valor;
+  guardarLog(); render();
 }
 
 const CLASE_INTENCION = { FALTANTE: "i-faltante", VENTA: "i-venta", CONSULTA: "i-consulta" };
@@ -231,8 +306,7 @@ function pintarItem(it) {
     alt ? el("span", { class: "linea" }, alt) : null,
     Number.isFinite(conf) ? el("span", { class: "linea" }, `Confianza: ${Math.round(conf * 100)} %`) : null,
     candidatos.length
-      ? el("span", { class: "linea" }, "¿Es alguno de estos? " +
-          candidatos.map((c) => `${c.nombre} (${Math.round(Number(c.similitud) * 100)} %)`).join(" · "))
+      ? el("span", { class: "linea" }, "¿Es alguno de estos? " + candidatos.map((c) => `${c.nombre} (${Math.round(Number(c.similitud) * 100)} %)`).join(" · "))
       : null,
     it.catalogo_error ? el("span", { class: "linea" }, "No pude consultar el catálogo.") : null,
   );
@@ -240,6 +314,19 @@ function pintarItem(it) {
 
 function pintarEntrada(e) {
   const hora = new Date(e.ts).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" });
+  
+  if (e.descartado) {
+    return el("article", { class: "card entrada", style: "opacity: 0.6; border-left: 4px solid #666;" },
+      el("div", { class: "cabecera" }, el("span", {}, hora + " - 🚫 Descartado por el Portero")),
+      el("blockquote", {}, e.texto),
+      el("div", { class: "veredicto" },
+        el("span", {}, "¿Era charla basura nomás?"),
+        el("button", { type: "button", "aria-pressed": String(e.veredicto === "ok"), onclick: () => marcar(e.id, "ok") }, "✔ Sí, era basura"),
+        el("button", { type: "button", "aria-pressed": String(e.veredicto === "mal"), onclick: () => marcar(e.id, "mal") }, "✘ No, era una venta"),
+      )
+    );
+  }
+
   return el("article", { class: "card entrada" },
     el("div", { class: "cabecera" }, el("span", {}, hora)),
     el("blockquote", {}, e.texto),
@@ -259,32 +346,32 @@ function render() {
   lista.replaceChildren(
     ...(log.length
       ? log.slice(0, MAX_VISIBLES).map(pintarEntrada)
-      : [el("p", { class: "vacio" }, "Todavía no hay dictados. Hacé clic en Activar Micrófono.")]),
+      : [el("p", { class: "vacio" }, "Todavía no hay dictados. Elegí un modo arriba del botón.")]),
   );
 
   const evaluadas = log.filter((e) => e.veredicto);
   const bien = evaluadas.filter((e) => e.veredicto === "ok").length;
   let txt;
   if (!evaluadas.length) {
-    txt = `Marcá ✔ o ✘ en cada resultado para medir la precisión. Objetivo: ${OBJETIVO} % con al menos ${MUESTRA_MINIMA} frases.`;
+    txt = `Marcá ✔ o ✘ en cada resultado para medir. Objetivo: ${OBJETIVO} % con ${MUESTRA_MINIMA} frases.`;
   } else {
     const pct = Math.round((bien / evaluadas.length) * 100);
     txt = `${bien} de ${evaluadas.length} salieron bien (${pct} %). Objetivo: ${OBJETIVO} %.`;
     if (evaluadas.length < MUESTRA_MINIMA) txt += ` Faltan ${MUESTRA_MINIMA - evaluadas.length} frases.`;
-    else txt += pct >= OBJETIVO ? " Objetivo alcanzado." : " Todavía por debajo del objetivo.";
+    else txt += pct >= OBJETIVO ? " Objetivo alcanzado." : " Por debajo del objetivo.";
   }
   $("stats").textContent = txt;
 }
 
-// ---------- exportar ----------
+// ---------- EXPORTAR ----------
 function celdaCsv(v) {
   let s = String(v ?? "");
   if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;    
   return `"${s.replace(/"/g, '""')}"`;
 }
 function descargarCsv() {
-  const filas = [["fecha", "texto", "veredicto", "items_json"]];
-  for (const e of [...log].reverse()) filas.push([e.ts, e.texto, e.veredicto ?? "", JSON.stringify(e.items)]);
+  const filas = [["fecha", "texto", "veredicto", "items_json", "descartado_por_portero"]];
+  for (const e of [...log].reverse()) filas.push([e.ts, e.texto, e.veredicto ?? "", JSON.stringify(e.items), e.descartado ? "SI" : "NO"]);
   const csv = "\uFEFF" + filas.map((f) => f.map(celdaCsv).join(",")).join("\r\n");
   const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
   const a = el("a", { href: url, download: `piloto-ferreteria-${new Date().toISOString().slice(0, 10)}.csv` });
@@ -294,7 +381,7 @@ function descargarCsv() {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-// ---------- PIN ----------
+// ---------- PIN Y CONTROLES ----------
 function mostrarPin() { $("pin-box").hidden = false; $("pin").focus(); }
 
 $("form-pin").addEventListener("submit", (e) => {
@@ -310,12 +397,12 @@ $("form-pin").addEventListener("submit", (e) => {
 });
 $("cambiar-pin").addEventListener("click", () => { pin = ""; store.del(LS_PIN); mostrarPin(); });
 
-// ---------- resto de los controles ----------
 $("form-texto").addEventListener("submit", (e) => {
   e.preventDefault();
   const t = $("texto-manual").value;
   if (!t.trim()) return;
   $("texto-manual").value = "";
+  // El texto manual va directo a la IA sin pasar por el portero
   analizar(t);
 });
 $("csv").addEventListener("click", descargarCsv);
@@ -326,7 +413,7 @@ $("borrar").addEventListener("click", () => {
   render();
 });
 
-// ---------- arranque ----------
+// ---------- ARRANQUE ----------
 if (!pin) mostrarPin();
 if (!SR) {
   setEstado("Este navegador no tiene dictado. Usá Chrome o Edge, o escribí abajo.");
