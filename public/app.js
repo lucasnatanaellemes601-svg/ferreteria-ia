@@ -1,34 +1,34 @@
-// Frontend del piloto: MODO DUAL (Manual / Automático con Portero Local)
-// JavaScript puro, sin dependencias. Todo lo que viene del servidor o del dictado
-// se pinta con textContent (nunca innerHTML).
+// public/app.js
+// Frontend del piloto: graba audio + dictado, identifica al vendedor por voz,
+// Enrolamiento de voces, Modo Dual (Manual / Portero), texto manual, CSV y métricas.
+// Todo lo que viene del servidor o del dictado se pinta con textContent (nunca innerHTML).
 
 const API = "/api/procesar";
 const LS_PIN = "ferreteria_pin";
-const LS_LOG = "ferreteria_piloto_v1";
-const MAX_LOG = 500;          // entradas guardadas en el navegador
-const MAX_VISIBLES = 20;      // entradas dibujadas
-const UMBRAL_REVISAR = 0.7;   // confianza por debajo de esto → "Revisar"
-const MUESTRA_MINIMA = 30;    // frases evaluadas para fiarse del porcentaje
-const OBJETIVO = 85;          // % de aciertos que pide el piloto
+const LS_LOG = "ferreteria_piloto_v2";
+const MAX_LOG = 500;
+const MAX_VISIBLES = 20;
+const UMBRAL_REVISAR = 0.7;
+const MUESTRA_MINIMA = 30;
+const OBJETIVO = 85;
+
+// Mientras sea true, SIEMPRE hay que confirmar quién atendió. Así se mide la precisión real de la voz.
+// Cuando la voz ya esté validada, pasalo a false (solo pedirá confirmar las dudosas).
+const MODO_PRUEBA_VOZ = true;
+
+const CORTE_AUTO_MS = 25000;   // en Portero, corta y manda cada 25 s como máximo (evita audios enormes)
+const MIN_MANUAL_MS = 1000;    // en manual, ignora toques de menos de 1 s
+const MIN_ENROLAR_MS = 10000;  // el enrolamiento necesita al menos 10 s de voz
 
 const $ = (id) => document.getElementById(id);
 
-// ---------- PALABRAS CLAVE DEL PORTERO (Filtro por Intención Comercial) ----------
+// ---------- PALABRAS CLAVE DEL PORTERO ----------
 const PALABRAS_CLAVE = [
-  // 1. Faltantes y stock (El vendedor niega o avisa que falta)
   "no hay", "no tengo", "no me quedan", "se terminó", "falta", "faltó", "sin stock", "agotado", "no quedó",
-  
-  // 2. Transacciones (El vendedor confirma)
   "vendí", "se llevó", "le cobré", "le di", "facturé",
-  
-  // 3. Pedidos (El cliente pide)
   "dame", "me das", "tenés", "tienen", "busco", "buscaba", "necesito", "quiero", "llevo", "me llevo", "te pido",
-  
-  // 4. Consultas de plata
   "cuánto", "precio", "sale", "vale", "presupuesto", "cotizame", "cobrame",
-  
-  // 5. Unidades y envases (Casi todo en ferretería va acompañado de esto)
-  "kilo", "metro", "litro", "bolsa", "caja", "paquete", "unidad", "pulgada", "milímetro", "centímetro", "docena", "par", "lata", "pomo"
+  "kilo", "metro", "litro", "bolsa", "caja", "paquete", "unidad", "pulgada", "milímetro", "centímetro", "docena", "par", "lata", "pomo",
 ];
 
 // ---------- ALMACENAMIENTO ----------
@@ -41,7 +41,7 @@ const store = {
 let pin = store.get(LS_PIN) || "";
 let log = cargarLog();
 let textoPendiente = null;
-let analizando = false;
+let enCurso = 0; // envíos al servidor en vuelo
 
 function cargarLog() {
   try {
@@ -68,236 +68,360 @@ function el(tag, props = {}, ...hijos) {
 }
 function setEstado(t) { $("estado").textContent = t; }
 
-// ---------- INYECTAR INTERRUPTOR DUAL ----------
+// ---------- INYECTAR BOTONES: ENROLAR + MODO DUAL ----------
 const ptt = $("ptt");
 let modoAuto = false;
+let modoEnrolamiento = false;
+
+const divEnrolar = el("div", { style: "text-align: center; margin-bottom: 15px;" },
+  el("button", {
+    type: "button",
+    style: "background: #333; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 0.9em;",
+    onclick: () => {
+      modoEnrolamiento = !modoEnrolamiento;
+      if (modoEnrolamiento) {
+        autoReiniciar = false;
+        clearTimeout(timerReinicio);
+        detenerGrabacion();
+        modoAuto = false;
+        if ($("switch-modo")) $("switch-modo").checked = false;
+      }
+      setEstado(modoEnrolamiento
+        ? "MODO ENROLAR: mantené apretado y hablá natural al menos 10 segundos."
+        : "Modo mostrador normal.");
+      pintarBoton();
+    },
+  }, "👤 Activar/Desactivar Enrolamiento"),
+);
+ptt.parentNode.insertBefore(divEnrolar, ptt);
 
 const toggleDiv = el("div", { style: "display: flex; gap: 15px; justify-content: center; align-items: center; margin-bottom: 25px; padding: 12px; background: rgba(255,255,255,0.03); border-radius: 12px; border: 1px solid #333;" },
   el("span", { style: "color: #bbb; font-weight: bold; font-size: 0.9em;" }, "👆 Modo Manual"),
   el("input", { type: "checkbox", id: "switch-modo", style: "width: 45px; height: 25px; cursor: pointer; accent-color: #f97316;" }),
-  el("span", { style: "color: #bbb; font-weight: bold; font-size: 0.9em;" }, "🤖 Modo Inteligente (Portero)")
+  el("span", { style: "color: #bbb; font-weight: bold; font-size: 0.9em;" }, "🤖 Modo Inteligente (Portero)"),
 );
 ptt.parentNode.insertBefore(toggleDiv, ptt);
 
 $("switch-modo").addEventListener("change", (e) => {
+  if (modoEnrolamiento) { e.target.checked = false; alert("Desactivá el modo enrolamiento primero."); return; }
+  autoReiniciar = false;
+  clearTimeout(timerReinicio);
+  detenerGrabacion();
   modoAuto = e.target.checked;
-  detener();
-  pintarBoton(false);
   $("transcripcion").textContent = "";
-  setEstado(modoAuto 
-    ? "Modo inteligente activo. Hacé clic en el botón para que escuche de fondo." 
+  setEstado(modoAuto
+    ? "Modo inteligente activo. Hacé clic en el botón para que escuche de fondo."
     : "Modo manual activo. Mantené apretado el botón mientras hablás.");
+  pintarBoton();
 });
 
-// ---------- DICTADO DUAL (Web Speech API) ----------
-const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-let rec = null;
-let escuchando = false;
-let quiereEscuchar = false; // Flag para modo manual
-let autoReiniciar = false;  // Flag para modo auto
-let finalTxt = "";
-let interimTxt = "";
-let errorVoz = "";
+// ---------- GRABACIÓN (MediaRecorder) + DICTADO (Web Speech) ----------
+let mediaRecorder = null;
+let mimeGrabacion = "";
+let audioChunks = [];
+let grabando = false;
+let autoReiniciar = false;
+let timerReinicio = null;
+let timerCorte = null;
+let inicioGrabacion = 0;
 
-function pintarBoton(activo) {
-  ptt.setAttribute("aria-pressed", String(activo));
-  if (modoAuto) {
-    $("ptt-texto").textContent = activo ? "🔴 Escuchando (Clic para pausar)" : "🎤 Activar micrófono inteligente";
-    if (activo) ptt.classList.add("grabando"); else ptt.classList.remove("grabando");
-  } else {
-    $("ptt-texto").textContent = activo ? "Escuchando... soltá al terminar" : "Mantené apretado para hablar";
-    ptt.classList.remove("grabando");
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let reconocedor = SR ? new SR() : null;
+let textoIntermedio = "";
+let textoFinal = "";
+
+function pintarBoton() {
+  ptt.setAttribute("aria-pressed", String(grabando));
+  ptt.classList.toggle("grabando", grabando);
+  let t;
+  if (modoEnrolamiento) t = grabando ? "🔴 Grabando huella vocal..." : "🎤 Mantené para Enrolar Voz";
+  else if (modoAuto) t = grabando || autoReiniciar ? "🔴 Escuchando de fondo (Clic para pausar)" : "🎤 Activar micrófono inteligente";
+  else t = grabando ? "🔴 Grabando... soltá al terminar" : "Mantené apretado para hablar";
+  $("ptt-texto").textContent = t;
+}
+
+function elegirMime() {
+  if (typeof MediaRecorder === "undefined") return null;
+  for (const m of ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg"]) {
+    if (MediaRecorder.isTypeSupported(m)) return m;
+  }
+  return "";
+}
+function extensionDe(mime) {
+  if (mime.includes("webm")) return "webm";
+  if (mime.includes("mp4")) return "mp4";
+  if (mime.includes("ogg")) return "ogg";
+  return "audio";
+}
+
+async function inicializarMic() {
+  if (mediaRecorder) return true;
+  const mime = elegirMime();
+  if (mime === null) { setEstado("Este navegador no puede grabar audio."); return false; }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mimeGrabacion = mime;
+    mediaRecorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+    if (!mimeGrabacion) mimeGrabacion = mediaRecorder.mimeType || "audio/webm";
+
+    mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunks.push(e.data); };
+    mediaRecorder.onstop = alTerminarGrabacion;
+    return true;
+  } catch {
+    setEstado("No pude acceder al micrófono. Revisá los permisos del navegador.");
+    return false;
   }
 }
 
-function iniciar() {
-  if (escuchando || rec || analizando) return;
-  if (!SR) {
-    setEstado("Navegador sin soporte de voz. Usá Chrome o Edge.");
-    $("manual").open = true;
+function alTerminarGrabacion() {
+  const audioBlob = new Blob(audioChunks, { type: mimeGrabacion });
+  const txt = (textoFinal + textoIntermedio).trim();
+  const duracion = Date.now() - inicioGrabacion;
+
+  if (modoEnrolamiento) {
+    if (duracion < MIN_ENROLAR_MS) setEstado("⚠️ Grabá al menos 10 segundos para que la huella vocal sirva.");
+    else descargarAudioEnrolamiento(audioBlob, extensionDe(mimeGrabacion));
     return;
   }
+
+  if (!modoAuto) {
+    if (duracion < MIN_MANUAL_MS) { setEstado("Muy corto. Mantené apretado mientras hablás."); return; }
+    enviarABackend(audioBlob, mimeGrabacion, txt);
+    return;
+  }
+
+  // Portero local: solo manda a la IA lo que pasa el filtro de palabras clave
+  if (txt) {
+    const min = txt.toLowerCase();
+    if (PALABRAS_CLAVE.some((p) => min.includes(p))) enviarABackend(audioBlob, mimeGrabacion, txt);
+    else registrarDescartado(txt);
+  }
+  if (autoReiniciar) timerReinicio = setTimeout(iniciarGrabacion, 300);
+}
+
+async function iniciarGrabacion() {
+  if (grabando) return;
   if (!pin) { mostrarPin(); setEstado("Primero ingresá el PIN."); return; }
 
-  rec = new SR();
-  rec.lang = "es-AR";
-  rec.continuous = true;
-  rec.interimResults = true;
-  rec.maxAlternatives = 1;
-  finalTxt = ""; interimTxt = ""; errorVoz = "";
+  const listo = await inicializarMic();
+  if (!listo) return;
+  if (mediaRecorder.state !== "inactive") return; // todavía cerrando la grabación anterior
+
+  audioChunks = [];
+  textoIntermedio = "";
+  textoFinal = "";
+  inicioGrabacion = Date.now();
   $("transcripcion").textContent = "";
-  setEstado("");
 
-  rec.onstart = () => {
-    escuchando = true;
-    pintarBoton(true);
-    if (!modoAuto && !quiereEscuchar) rec.stop(); // Soltó rápido en modo manual
-  };
-
-  rec.onresult = (ev) => {
-    if (!modoAuto) {
-      // Comportamiento Manual
-      interimTxt = "";
-      for (let i = ev.resultIndex; i < ev.results.length; i++) {
-        if (ev.results[i].isFinal) finalTxt += ev.results[i][0].transcript + " ";
-        else interimTxt += ev.results[i][0].transcript;
-      }
-      $("transcripcion").textContent = (finalTxt + interimTxt).trim();
-    } else {
-      // Comportamiento Auto/Portero
-      let tTemp = ""; let tFinal = "";
+  // En enrolamiento no hace falta transcribir
+  if (reconocedor && !modoEnrolamiento) {
+    reconocedor.lang = "es-AR";
+    reconocedor.continuous = true;
+    reconocedor.interimResults = true;
+    reconocedor.onresult = (ev) => {
+      let tFinal = "";
+      let tTemp = "";
       for (let i = ev.resultIndex; i < ev.results.length; i++) {
         if (ev.results[i].isFinal) tFinal += ev.results[i][0].transcript + " ";
         else tTemp += ev.results[i][0].transcript;
       }
-      $("transcripcion").textContent = (tFinal + tTemp).trim();
-      
-      // Cuando hay una frase final, se la pasamos al portero
-      if (tFinal.trim() !== "") {
-        evaluarPortero(tFinal.trim());
-      }
-    }
-  };
+      if (modoAuto) { textoFinal = tFinal; textoIntermedio = tTemp; }
+      else { textoFinal += tFinal; textoIntermedio = tTemp; }
+      $("transcripcion").textContent = (textoFinal + textoIntermedio).trim();
 
-  rec.onerror = (ev) => { 
-    errorVoz = ev.error || "desconocido"; 
-    if (errorVoz === "not-allowed" || errorVoz === "service-not-allowed") {
-      autoReiniciar = false; 
-    }
-  };
+      // Portero: cuando termina una frase, corta y evalúa
+      if (modoAuto && tFinal.trim() !== "") detenerGrabacion();
+    };
+    reconocedor.onerror = () => { /* se ignora: el audio igual se graba */ };
+    try { reconocedor.start(); }
+    catch { setTimeout(() => { try { reconocedor.start(); } catch { /* nada */ } }, 300); }
+  }
 
-  rec.onend = () => {
-    escuchando = false;
-    rec = null;
-    pintarBoton(false);
-    
-    if (!modoAuto) {
-      // En manual, al terminar manda lo que acumuló directo a IA
-      const t = (finalTxt + interimTxt).trim();
-      if (t) analizar(t);
-      else if (errorVoz && errorVoz !== "aborted") setEstado("No te escuché. Mantené apretado mientras hablás.");
-    } else {
-      // En auto, si no lo pausó el usuario, reinicia para seguir escuchando
-      if (autoReiniciar) {
-        setTimeout(() => { if (autoReiniciar && !escuchando) iniciar(); }, 300);
-      } else if (errorVoz && errorVoz !== "aborted") {
-        setEstado("Micrófono pausado.");
-      }
-    }
-  };
+  mediaRecorder.start();
+  grabando = true;
 
-  try { rec.start(); } catch { rec = null; setEstado("No pude iniciar el micrófono."); }
+  // Portero: corte por tiempo, para no acumular minutos de silencio
+  clearTimeout(timerCorte);
+  if (modoAuto) timerCorte = setTimeout(() => { if (grabando) detenerGrabacion(); }, CORTE_AUTO_MS);
+
+  pintarBoton();
+  setEstado("");
 }
 
-function detener() { 
-  autoReiniciar = false; 
-  quiereEscuchar = false;
-  if (rec && escuchando) rec.stop(); 
+function detenerGrabacion() {
+  clearTimeout(timerCorte);
+  if (!grabando) return;
+  grabando = false;
+  if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
+  if (reconocedor && !modoEnrolamiento) { try { reconocedor.stop(); } catch { /* nada */ } }
+  pintarBoton();
 }
 
 // ----- EVENTOS DEL BOTÓN -----
-// Para el Modo Manual (Mantiene apretado)
-ptt.addEventListener("pointerdown", (e) => { 
-  if (modoAuto || e.button !== 0) return; // Si es auto o click derecho, ignora
-  e.preventDefault(); 
-  ptt.setPointerCapture(e.pointerId); 
-  quiereEscuchar = true; 
-  iniciar(); 
+// Manual y enrolamiento: mantener apretado
+ptt.addEventListener("pointerdown", (e) => {
+  if (modoAuto || e.button !== 0) return;
+  e.preventDefault();
+  ptt.setPointerCapture(e.pointerId);
+  iniciarGrabacion();
 });
-ptt.addEventListener("pointerup", () => { if (!modoAuto) { quiereEscuchar = false; detener(); } });
-ptt.addEventListener("pointercancel", () => { if (!modoAuto) { quiereEscuchar = false; detener(); } });
+ptt.addEventListener("pointerup", () => { if (!modoAuto) detenerGrabacion(); });
+ptt.addEventListener("pointercancel", () => { if (!modoAuto) detenerGrabacion(); });
 
-// Para el Modo Auto (Un solo clic)
+// Portero: un clic activa, otro clic pausa (también durante la pausa de 300 ms entre tramos)
+function alternarAuto() {
+  if (autoReiniciar) {
+    autoReiniciar = false;
+    clearTimeout(timerReinicio);
+    detenerGrabacion();
+    pintarBoton();
+  } else {
+    autoReiniciar = true;
+    iniciarGrabacion();
+  }
+}
 ptt.addEventListener("click", (e) => {
   if (!modoAuto) return;
   e.preventDefault();
-  if (escuchando || autoReiniciar) detener(); 
-  else { autoReiniciar = true; iniciar(); }
+  alternarAuto();
 });
 
-// Soporte barra espaciadora
+// Barra espaciadora
 document.addEventListener("keydown", (e) => {
-  if (e.code !== "Space" || e.repeat || e.target.matches("input, textarea")) return;
+  if (e.code !== "Space" || e.repeat || e.target.matches("input, textarea, button")) return;
   e.preventDefault();
-  if (!modoAuto) { quiereEscuchar = true; iniciar(); }
+  if (!modoAuto) iniciarGrabacion();
 });
 document.addEventListener("keyup", (e) => {
-  if (e.code !== "Space" || e.target.matches("input, textarea")) return;
+  if (e.code !== "Space" || e.target.matches("input, textarea, button")) return;
   e.preventDefault();
-  if (!modoAuto) { quiereEscuchar = false; detener(); }
-  else { if (escuchando || autoReiniciar) detener(); else { autoReiniciar = true; iniciar(); } }
+  if (!modoAuto) detenerGrabacion();
+  else alternarAuto();
 });
 
-// ---------- EL PORTERO LOCAL ----------
-function evaluarPortero(texto) {
-  const txt = texto.toLowerCase();
-  const pasaFiltro = PALABRAS_CLAVE.some(p => txt.includes(p));
+// ---------- ENROLAMIENTO ----------
+function descargarAudioEnrolamiento(blob, ext) {
+  const nombre = (prompt("¡Audio capturado! ¿De qué vendedor es esta voz? (Ej: Marta, Marcos)") || "")
+    .trim()
+    .replace(/[\\/:*?"<>|]/g, "");
+  if (!nombre) { setEstado("Enrolamiento cancelado."); return; }
 
-  if (pasaFiltro) {
-    analizar(texto); // Manda a la IA
-  } else {
-    registrarDescartado(texto); // Lo guarda como basura
-  }
+  const url = URL.createObjectURL(blob);
+  const a = el("a", { href: url, download: `${nombre}.${ext}`, style: "display:none" });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  setEstado(`Audio de ${nombre} descargado. Copialo a la carpeta 'voces' del proyecto y hacé git push.`);
 }
 
-// ---------- LLAMADA AL BACKEND ----------
-async function analizar(textoCrudo) {
-  const texto = textoCrudo.replace(/\s+/g, " ").trim();
-  if (texto.length < 2) return;
-  if (!pin) { textoPendiente = texto; mostrarPin(); setEstado("Primero ingresá el PIN."); return; }
+// ---------- ENVÍO AL BACKEND ----------
+function blobABase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(String(reader.result).split(",")[1] || "");
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
 
-  analizando = true;
-  setEstado("Analizando con IA…");
+// blob = null → solo texto (formulario manual)
+async function enviarABackend(blob, mimeType, textoCrudo) {
+  const texto = String(textoCrudo || "").replace(/\s+/g, " ").trim();
+  if (!blob && texto.length < 2) return;
+  if (!pin) {
+    if (!blob) textoPendiente = texto;
+    mostrarPin();
+    setEstado("Primero ingresá el PIN.");
+    return;
+  }
+
+  enCurso++;
+  setEstado(blob ? "Analizando audio y voz con IA…" : "Analizando con IA…");
   try {
+    const cuerpo = blob
+      ? { audioBase64: await blobABase64(blob), mimeType, texto }
+      : { texto };
+
     const r = await fetch(API, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-app-pin": pin },
-      body: JSON.stringify({ texto }),
+      body: JSON.stringify(cuerpo),
     });
     const data = await r.json().catch(() => ({}));
+
     if (!r.ok) {
-      if (data.error === "pin_incorrecto") { pin = ""; store.del(LS_PIN); textoPendiente = texto; mostrarPin(); }
-      setEstado(`Error del servidor (${r.status}).`);
+      if (data.error === "pin_incorrecto") {
+        pin = "";
+        store.del(LS_PIN);
+        if (!blob) textoPendiente = texto;
+        mostrarPin();
+      }
+      setEstado(`Error del servidor (${r.status}): ${data.error || "desconocido"}`);
       return;
     }
     if (!Array.isArray(data.items)) { setEstado("Respuesta inesperada del servidor."); return; }
-    
-    registrar(texto, data.items);
-    $("transcripcion").textContent = ""; 
+
+    registrar(texto, data);
+    $("transcripcion").textContent = "";
     setEstado(data.items.length ? "Listo. Revisá el resultado." : "No detecté productos.");
   } catch {
-    $("texto-manual").value = texto;
-    $("manual").open = true;
-    setEstado("Sin conexión con el servidor. Dejé tu texto abajo para reintentar.");
+    if (!blob) {
+      $("texto-manual").value = texto;
+      const det = $("manual");
+      if (det) det.open = true;
+      setEstado("Sin conexión con el servidor. Dejé tu texto abajo para reintentar.");
+    } else {
+      setEstado("Sin conexión con el servidor. Ese audio no se envió.");
+    }
   } finally {
-    analizando = false;
+    enCurso--;
   }
 }
 
 // ---------- HISTORIAL Y MEDICIÓN ----------
-function registrar(texto, items) {
-  const id = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-ok`;
-  log.unshift({ id, ts: new Date().toISOString(), texto, items, veredicto: null, descartado: false });
+function nuevoId(sufijo) {
+  return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${sufijo}`;
+}
+
+function registrar(texto, data) {
+  log.unshift({ id: nuevoId("ok"), ts: new Date().toISOString(), texto, data, veredicto: null, descartado: false });
   if (log.length > MAX_LOG) log.length = MAX_LOG;
-  guardarLog(); render();
+  guardarLog();
+  render();
 }
 
 function registrarDescartado(texto) {
-  const id = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-basura`;
-  log.unshift({ id, ts: new Date().toISOString(), texto, items: [], veredicto: null, descartado: true });
+  log.unshift({ id: nuevoId("basura"), ts: new Date().toISOString(), texto, data: null, veredicto: null, descartado: true });
   if (log.length > MAX_LOG) log.length = MAX_LOG;
-  guardarLog(); render();
+  guardarLog();
+  render();
 }
 
 function marcar(id, valor) {
   const e = log.find((x) => x.id === id);
   if (!e) return;
   e.veredicto = e.veredicto === valor ? null : valor;
-  guardarLog(); render();
+  guardarLog();
+  render();
+}
+
+// Guarda lo que creyó la IA para poder medir aciertos de voz
+function confirmarEmpleado(id, nombreReal) {
+  const e = log.find((x) => x.id === id);
+  if (!e?.data?.empleado) return;
+  const emp = e.data.empleado;
+  if (emp.ia_original === undefined) emp.ia_original = emp.nombre;
+  emp.nombre = nombreReal;
+  emp.confirmado = true;
+  e.data.requiere_confirmacion = false;
+  guardarLog();
+  render();
 }
 
 const CLASE_INTENCION = { FALTANTE: "i-faltante", VENTA: "i-venta", CONSULTA: "i-consulta" };
 const ETIQUETA_INTENCION = { FALTANTE: "Faltante", VENTA: "Venta", CONSULTA: "Consulta" };
+const COLOR_HABLANTE = { EMPLEADO: "#3b82f6", CLIENTE: "#10b981", DESCONOCIDO: "#6b7280" };
 
 function pintarItem(it) {
   const alt = it.alternativa_ofrecida
@@ -307,8 +431,11 @@ function pintarItem(it) {
   const candidatos = Array.isArray(it.candidatos) ? it.candidatos : [];
 
   return el("li", { class: `item ${CLASE_INTENCION[it.intencion] || ""}` },
+    it.hablante
+      ? el("span", { class: "badge", style: `background-color: ${COLOR_HABLANTE[it.hablante] || "#6b7280"}; font-size: 0.7em; margin-right: 8px; color: white;` }, String(it.hablante))
+      : null,
     el("span", { class: "badge" }, ETIQUETA_INTENCION[it.intencion] || String(it.intencion)),
-    el("strong", {}, String(it.producto_estandarizado)),
+    el("strong", {}, String(it.producto_estandarizado ?? "")),
     el("span", {}, `× ${it.cantidad}`),
     it.medida_o_detalle ? el("span", { class: "muted" }, String(it.medida_o_detalle)) : null,
     Number.isFinite(conf) && conf < UMBRAL_REVISAR ? el("span", { class: "revisar" }, "Revisar") : null,
@@ -323,7 +450,7 @@ function pintarItem(it) {
 
 function pintarEntrada(e) {
   const hora = new Date(e.ts).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" });
-  
+
   if (e.descartado) {
     return el("article", { class: "card entrada", style: "opacity: 0.6; border-left: 4px solid #666;" },
       el("div", { class: "cabecera" }, el("span", {}, hora + " - 🚫 Descartado por el Portero")),
@@ -332,18 +459,39 @@ function pintarEntrada(e) {
         el("span", {}, "¿Era charla basura nomás?"),
         el("button", { type: "button", "aria-pressed": String(e.veredicto === "ok"), onclick: () => marcar(e.id, "ok") }, "✔ Sí, era basura"),
         el("button", { type: "button", "aria-pressed": String(e.veredicto === "mal"), onclick: () => marcar(e.id, "mal") }, "✘ No, era una venta"),
-      )
+      ),
     );
   }
 
+  const { empleado, items, requiere_confirmacion, empleados_posibles } = e.data || {};
+  const conVoz = Boolean(empleado && Array.isArray(empleados_posibles)); // solo si la entrada vino con audio
+
+  let btnConfirmacion = null;
+  if (conVoz && (requiere_confirmacion || MODO_PRUEBA_VOZ) && !empleado.confirmado) {
+    btnConfirmacion = el("div", { style: "margin-top: 10px; padding: 10px; background: rgba(239,68,68,0.1); border-radius: 8px;" },
+      el("strong", { style: "color: #ef4444; display: block; margin-bottom: 5px;" },
+        requiere_confirmacion ? "⚠️ Voz dudosa. ¿Quién atendió?" : "Confirmá quién atendió (prueba de voz)"),
+      ...empleados_posibles.map((nombre) =>
+        el("button", { type: "button", onclick: () => confirmarEmpleado(e.id, nombre), style: "margin-right: 5px; padding: 5px 10px; cursor: pointer;" }, String(nombre))),
+    );
+  }
+
+  const listaItems = Array.isArray(items) ? items : [];
   return el("article", { class: "card entrada" },
-    el("div", { class: "cabecera" }, el("span", {}, hora)),
-    el("blockquote", {}, e.texto),
-    e.items.length
-      ? el("ul", { class: "items" }, e.items.map(pintarItem))
+    el("div", { class: "cabecera" },
+      el("span", {}, hora),
+      conVoz
+        ? el("strong", { style: "color: #f97316;" },
+            `👤 Vendedor: ${empleado.nombre}${empleado.confirmado ? " ✔" : ` (${Math.round(Number(empleado.confianza) * 100)}%)`}`)
+        : null,
+    ),
+    e.texto ? el("blockquote", {}, e.texto) : null,
+    btnConfirmacion,
+    listaItems.length
+      ? el("ul", { class: "items" }, listaItems.map(pintarItem))
       : el("p", { class: "vacio" }, "No se detectaron productos."),
     el("div", { class: "veredicto" },
-      el("span", {}, "¿Salió bien?"),
+      el("span", {}, "¿Salieron bien los productos?"),
       el("button", { type: "button", "aria-pressed": String(e.veredicto === "ok"), onclick: () => marcar(e.id, "ok") }, "✔ Sí"),
       el("button", { type: "button", "aria-pressed": String(e.veredicto === "mal"), onclick: () => marcar(e.id, "mal") }, "✘ No"),
     ),
@@ -351,13 +499,13 @@ function pintarEntrada(e) {
 }
 
 function render() {
-  const lista = $("lista");
-  lista.replaceChildren(
+  $("lista").replaceChildren(
     ...(log.length
       ? log.slice(0, MAX_VISIBLES).map(pintarEntrada)
       : [el("p", { class: "vacio" }, "Todavía no hay dictados. Elegí un modo arriba del botón.")]),
   );
 
+  // Métrica de productos
   const evaluadas = log.filter((e) => e.veredicto);
   const bien = evaluadas.filter((e) => e.veredicto === "ok").length;
   let txt;
@@ -369,19 +517,33 @@ function render() {
     if (evaluadas.length < MUESTRA_MINIMA) txt += ` Faltan ${MUESTRA_MINIMA - evaluadas.length} frases.`;
     else txt += pct >= OBJETIVO ? " Objetivo alcanzado." : " Por debajo del objetivo.";
   }
-  $("stats").textContent = txt;
+
+  // Métrica de voz: solo cuenta las entradas donde confirmaste quién habló
+  const vozEvaluada = log.filter((e) => e.data?.empleado?.confirmado);
+  if (vozEvaluada.length) {
+    const aciertos = vozEvaluada.filter((e) => e.data.empleado.ia_original === e.data.empleado.nombre).length;
+    txt += ` | Aciertos de voz: ${aciertos}/${vozEvaluada.length} (${Math.round((aciertos / vozEvaluada.length) * 100)} %)`;
+  }
+
+  const st = $("stats");
+  if (st) st.textContent = txt;
 }
 
 // ---------- EXPORTAR ----------
 function celdaCsv(v) {
   let s = String(v ?? "");
-  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;    
+  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
   return `"${s.replace(/"/g, '""')}"`;
 }
 function descargarCsv() {
-  const filas = [["fecha", "texto", "veredicto", "items_json", "descartado_por_portero"]];
-  for (const e of [...log].reverse()) filas.push([e.ts, e.texto, e.veredicto ?? "", JSON.stringify(e.items), e.descartado ? "SI" : "NO"]);
-  const csv = "\uFEFF" + filas.map((f) => f.map(celdaCsv).join(",")).join("\r\n");
+  const filas = [["fecha", "texto", "veredicto", "items_json", "descartado_por_portero", "vendedor_ia", "vendedor_confirmado"]];
+  for (const e of [...log].reverse()) {
+    const emp = e.data?.empleado;
+    const ia = emp ? (emp.ia_original ?? emp.nombre ?? "") : "";
+    const confirmado = emp?.confirmado ? emp.nombre : "";
+    filas.push([e.ts, e.texto || "", e.veredicto ?? "", JSON.stringify(e.data?.items || []), e.descartado ? "SI" : "NO", ia, confirmado]);
+  }
+  const csv = "﻿" + filas.map((f) => f.map(celdaCsv).join(",")).join("\r\n");
   const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
   const a = el("a", { href: url, download: `piloto-ferreteria-${new Date().toISOString().slice(0, 10)}.csv` });
   document.body.append(a);
@@ -402,7 +564,7 @@ $("form-pin").addEventListener("submit", (e) => {
   $("pin").value = "";
   $("pin-box").hidden = true;
   setEstado("PIN guardado.");
-  if (textoPendiente) { const t = textoPendiente; textoPendiente = null; analizar(t); }
+  if (textoPendiente) { const t = textoPendiente; textoPendiente = null; enviarABackend(null, null, t); }
 });
 $("cambiar-pin").addEventListener("click", () => { pin = ""; store.del(LS_PIN); mostrarPin(); });
 
@@ -411,8 +573,8 @@ $("form-texto").addEventListener("submit", (e) => {
   const t = $("texto-manual").value;
   if (!t.trim()) return;
   $("texto-manual").value = "";
-  // El texto manual va directo a la IA sin pasar por el portero
-  analizar(t);
+  // El texto manual va directo a la IA, sin portero y sin voz
+  enviarABackend(null, null, t);
 });
 $("csv").addEventListener("click", descargarCsv);
 $("borrar").addEventListener("click", () => {
@@ -425,7 +587,9 @@ $("borrar").addEventListener("click", () => {
 // ---------- ARRANQUE ----------
 if (!pin) mostrarPin();
 if (!SR) {
-  setEstado("Este navegador no tiene dictado. Usá Chrome o Edge, o escribí abajo.");
-  $("manual").open = true;
+  setEstado("Este navegador no tiene dictado nativo. Podés grabar audio (modo manual) o escribir abajo.");
+  const det = $("manual");
+  if (det) det.open = true;
 }
+pintarBoton();
 render();

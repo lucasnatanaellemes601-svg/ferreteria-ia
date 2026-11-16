@@ -1,6 +1,9 @@
 {
   "functions": {
-    "api/procesar.js": { "maxDuration": 30 }
+    "api/procesar.js": { 
+      "maxDuration": 30,
+      "includeFiles": "voces/**"
+    }
   },
   "headers": [
     {
