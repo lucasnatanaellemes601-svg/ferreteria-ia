@@ -357,7 +357,7 @@ async function enviarABackend(blob, mimeType, textoCrudo) {
         if (!blob) textoPendiente = texto;
         mostrarPin();
       }
-      setEstado(`Error del servidor (${r.status}): ${data.error || "desconocido"}`);
+      setEstado(`Error del servidor (${r.status}): ${data.error || "desconocido"}${data.detalle ? " — " + data.detalle : ""}`);
       return;
     }
     if (!Array.isArray(data.items)) { setEstado("Respuesta inesperada del servidor."); return; }

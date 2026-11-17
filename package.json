@@ -11,9 +11,9 @@
     "dev": "vercel dev"
   },
   "dependencies": {
-    "@google/genai": "^3.0.0",
-    "@supabase/supabase-js": "^2.119.0",
-    "zod": "^4.6.7"
+    "@google/genai": "^0.1.2",
+    "@supabase/supabase-js": "^2.39.3",
+    "zod": "^3.23.8"
   },
   "directories": {
     "lib": "lib"
