@@ -122,6 +122,7 @@ function crearFila({ codigo = "", descripcion = "", cantidad = 1, unidad = "", p
   const tr = document.createElement("tr");
   const code = crearInput({ label: "Código", value: codigo, placeholder: "Código" });
   const name = crearInput({ label: "Artículo o descripción", value: descripcion, placeholder: "Descripción" });
+  name.addEventListener("change", () => vincularPresupuestoConCatalogo());
   const qty = crearInput({ label: "Cantidad", value: String(cantidad), type: "number", step: "0.01", min: "0.01" });
   const unit = crearInput({ label: "Unidad", value: unidad, placeholder: "un, caja, m" });
   const unitPrice = crearInput({ label: "Precio unitario", value: precio, placeholder: iva === IVA_INCLUIDO_GESTION ? "Precio Gestión" : "Completar", type: "number", step: "0.01", min: "0" });
@@ -260,7 +261,10 @@ function normalizarClave(valor) {
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
-    .replace(/(\d)\s*mm\b/g, "$1mm")
+    .replace(/\b(\d+)\s+(\d+)\s*\/\s*(\d+)\b/g, "$1$2/$3")
+    .replace(/\b(\d+)\s*\/\s*(\d+)\b/g, "$1f$2")
+    .replace(/\b([a-z])\s*-\s*([a-z])\b/g, "$1$2")
+    .replace(/(\d+(?:[.,]\d+)?)\s*(mm|cm|m)\b/g, (_, numero, unidad) => `${numero.replace(",", ".")}${unidad}`)
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
 }
@@ -318,7 +322,7 @@ function catalogoCoincidente(nombre, detalle = "") {
   if (coincidenciasExactas.length === 1) return coincidenciasExactas[0];
   if (coincidenciasExactas.length > 1) return null;
 
-  const stopWords = new Set(["de", "del", "para", "por", "con", "el", "la", "los", "las", "un", "una", "y"]);
+  const stopWords = new Set(["de", "del", "para", "por", "con", "el", "la", "los", "las", "un", "una", "y", "pulg", "pulgada", "pulgadas", "mm", "cm", "m", "metro", "metros", "unidad", "unidades"]);
   const terminos = buscado.split(" ").filter((t) => t.length > 1 && !stopWords.has(t));
   if (!terminos.length) return null;
   const candidatas = catalogo.filter((p) => {
@@ -326,6 +330,68 @@ function catalogoCoincidente(nombre, detalle = "") {
     return terminos.every((termino) => texto.has(termino));
   });
   return candidatas.length === 1 ? candidatas[0] : null;
+}
+
+function vincularPresupuestoConCatalogo() {
+  if (!catalogo.length || !$("quote-items")) return 0;
+  let actualizadas = 0;
+  for (const tr of Array.from($("quote-items").rows)) {
+    const inputs = tr.querySelectorAll("input");
+    const codigo = inputs[0]?.value.trim() || "";
+    const descripcion = inputs[1]?.value.trim() || "";
+    const producto = codigo
+      ? catalogo.find((p) => normalizarCodigo(p.codigo) === normalizarCodigo(codigo))
+      : catalogoCoincidente(descripcion);
+    if (!producto) continue;
+
+    let cambio = false;
+    const completar = (campo, valor) => {
+      if (campo && valor && campo.value.trim() !== String(valor)) {
+        campo.value = String(valor);
+        cambio = true;
+      }
+    };
+    completar(inputs[0], producto.codigo);
+    if (!descripcion) completar(inputs[1], producto.descripcion);
+    completar(inputs[3], producto.unidad);
+
+    const iva = tr.querySelector("select");
+    if (!inputs[4]?.value.trim()) {
+      if (Number.isFinite(producto.precioNeto) && IVA_PERMITIDOS.includes(producto.iva)) {
+        completar(inputs[4], producto.precioNeto);
+        if (iva.value !== String(producto.iva)) { iva.value = String(producto.iva); cambio = true; }
+      } else if (Number.isFinite(producto.precioLista1ConIva)) {
+        completar(inputs[4], producto.precioLista1ConIva);
+        if (iva.value !== IVA_INCLUIDO_GESTION) { iva.value = IVA_INCLUIDO_GESTION; cambio = true; }
+      }
+    }
+
+    const celda = tr.querySelector(".quote-stock-cell");
+    if (celda) {
+      const yaTeniaStockVinculado = Boolean(celda.dataset.source) || celda.dataset.stock !== "";
+      if (!yaTeniaStockVinculado && celda.dataset.manualShortage === "true") {
+        celda.dataset.manualShortage = "false";
+        cambio = true;
+      }
+      const fuente = fuenteStock(producto);
+      const stock = Number.isFinite(producto.stock) ? String(producto.stock) : "";
+      if (celda.dataset.source !== fuente || celda.dataset.stock !== stock || celda.dataset.unit !== (producto.unidad || "unidades")) cambio = true;
+      celda.dataset.source = fuente;
+      celda.dataset.stock = stock;
+      celda.dataset.unit = producto.unidad || "unidades";
+      const cantidad = Number(inputs[2]?.value) > 0 ? Number(inputs[2].value) : 1;
+      const etiqueta = textoStock(producto, cantidad);
+      const texto = celda.querySelector(".quote-stock-text");
+      if (texto && texto.textContent !== etiqueta) { texto.textContent = etiqueta; cambio = true; }
+    }
+    if (cambio) actualizadas++;
+  }
+  if (actualizadas) {
+    recalcular();
+    guardarBorrador();
+    $("quote-status").textContent = actualizadas + " artículo(s) vinculados o actualizados desde el catálogo. Revisá precios, IVA incluido y stock del corte importado.";
+  }
+  return actualizadas;
 }
 
 function agregarDesdeCatalogo(producto) {
@@ -826,6 +892,7 @@ export function iniciarPresupuestos() {
   const borradorRestaurado = cargarBorrador();
   if (!borradorRestaurado) crearFila();
   presupuestoListo = true;
+  vincularPresupuestoConCatalogo();
   actualizarCatalogo();
   renderizarArchivados();
   if (!borradorRestaurado) guardarBorrador();
@@ -862,6 +929,7 @@ export function iniciarPresupuestos() {
     try {
       if (file.size > 5 * 1024 * 1024) throw new Error("El CSV supera el límite de 5 MB.");
       const result = importarCsv(await file.text());
+      vincularPresupuestoConCatalogo();
       $("quote-catalog-status").textContent = `${result.importados} productos importados o actualizados${result.omitidos ? `; ${result.omitidos} filas omitidas por datos inválidos` : ""}.`;
     } catch (error) {
       $("quote-catalog-status").textContent = error?.message || "No se pudo importar el CSV.";
