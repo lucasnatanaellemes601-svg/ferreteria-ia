@@ -13,13 +13,20 @@ toca stock ni precios por su cuenta.
 ```
 ferreteria-ia/
 ├─ public/
-│  ├─ index.html          Pantalla del mostrador (botón push-to-talk, resultados, medición)
-│  └─ app.js              Lógica del navegador (sin dependencias)
+│  ├─ index.html          Pantalla del mostrador (dictado, resultados y presupuesto)
+│  ├─ app.js              Lógica del navegador (sin dependencias)
+│  ├─ presupuesto.js      Borrador, totalización y artículos desde consultas
+│  ├─ presupuesto.css     Estilos de pantalla e impresión
+│  └─ assets/ferrmel-logo.png Logo usado en el presupuesto
 ├─ api/
 │  └─ procesar.js         Función serverless: Gemini + validación (+ catálogo en la Fase 2)
 ├─ lib/
 │  ├─ prompt.js           Prompt de sistema con jerga ferretera y ejemplos
-│  └─ schema.js           Esquema de salida de Gemini + validación con Zod
+│  ├─ schema.js           Esquema de salida de Gemini + validación con Zod
+│  └─ gestion/adapter.js  Punto de integración bloqueado para Gestión
+├─ docs/
+│  ├─ catalogo-local.md   Carga de productos para presupuestar sin Gestión
+│  └─ integraciones/gestion.md  Requisitos para la futura API
 ├─ supabase/
 │  └─ schema.sql          Base de datos completa (Fase 2). Un solo script.
 ├─ .cursor/rules/
@@ -28,6 +35,18 @@ ferreteria-ia/
 ├─ vercel.json            Timeout de la función y headers de seguridad
 └─ package.json
 ```
+
+## Presupuestos (piloto)
+
+La pantalla permite armar e imprimir un presupuesto con logo, datos del cliente, artículos, IVA, totales y condiciones. Los artículos detectados como consultas por voz se pueden agregar; si hay una coincidencia exacta en el catálogo local, también carga el precio neto y el IVA guardados allí.
+
+El catálogo admite carga manual e importación CSV con las columnas `codigo;descripcion;unidad;precio_sin_iva;iva`. La app guarda el catálogo y un borrador activo en el almacenamiento local del navegador. Exportá el catálogo para tener una copia. Estos datos no se comparten entre computadoras ni consultan el catálogo de Gestión. Cada presupuesto debe revisarse antes de imprimir; el módulo no registra ventas ni modifica stock.
+
+Instrucciones de carga inicial: `docs/catalogo-local.md`.
+
+## Gestión
+
+El punto de extensión y las variables de entorno están reservados en `lib/gestion/adapter.js` y `.env.example`. El adaptador está forzado a desactivado y no hace solicitudes de red. Revisá `docs/integraciones/gestion.md` antes de cargar credenciales: una llave sola no alcanza sin la URL, el método de autenticación y la documentación de la API oficial.
 
 ## Puesta en marcha (Fase 1, unos 30 minutos)
 
@@ -94,7 +113,7 @@ No lo hagas hasta que el piloto dé bien.
 3. *Authentication → Sign In / Providers*: **desactivá el registro abierto** y creá los usuarios a mano
    (*Authentication → Users*). Si no, cualquiera que se registre entra como vendedor.
 4. Hacé admin a tu usuario ejecutando la última línea del script (reemplazá el email).
-5. Cargá productos y proveedores (en la Fase 3 va el importador de CSV).
+5. Cargá productos y proveedores (en la Fase 3 va el importador de CSV para Supabase; el CSV local de presupuestos no carga la base).
 6. **Recién entonces** completá `SUPABASE_URL` y `SUPABASE_ANON_KEY` en Vercel. Nunca cargues la
    `service_role` en ningún lado.
 

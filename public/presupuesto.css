@@ -1,0 +1,121 @@
+.quote-section { margin-top: 24px; }
+.quote-section > summary { font-size: 1.05rem; font-weight: 700; }
+.quote-add { flex-basis: 100%; width: fit-content; margin-top: 4px; border-color: var(--accent); color: var(--accent); font-size: .82rem; }
+.quote-paper {
+  margin-top: 12px; padding: 16px; background: var(--card); color: var(--fg);
+  border: 1px solid var(--line); border-radius: 12px;
+}
+.quote-demo-note {
+  margin-bottom: 12px; padding: 9px 11px; border-left: 4px solid #f17808;
+  background: color-mix(in srgb, #f17808 12%, var(--card)); color: var(--fg);
+  font-size: .82rem;
+}
+.quote-brand {
+  display: grid; grid-template-columns: 76px minmax(0, 1fr) minmax(120px, 160px);
+  gap: 12px; align-items: center; padding: 12px; background: #0b0b0d;
+  color: #fff; border-bottom: 5px solid #f17808;
+}
+.quote-logo { width: 76px; height: 72px; object-fit: cover; border-radius: 6px; }
+.quote-brand-name { font-size: 1.35rem; line-height: 1; font-weight: 900; letter-spacing: .05em; }
+.quote-brand-tagline { margin-top: 6px; color: #d9d9d9; font-size: .68rem; letter-spacing: .06em; text-transform: uppercase; }
+.quote-ref-wrap label { display: block; margin-bottom: 3px; color: #d9d9d9; font-size: .68rem; font-weight: 700; letter-spacing: .08em; }
+.quote-ref-wrap input { color: #fff; background: #242426; border-color: #555; }
+.quote-fields { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 10px; margin-top: 14px; padding: 12px; background: var(--bg); border: 1px solid var(--line); }
+.quote-fields label, .quote-conditions { display: grid; gap: 4px; min-width: 0; color: var(--muted); font-size: .72rem; font-weight: 700; }
+.quote-fields input, .quote-conditions textarea { min-width: 0; font-size: .85rem; }
+.quote-table-wrap { width: 100%; overflow-x: auto; margin-top: 16px; }
+.quote-table { width: 100%; min-width: 630px; border-collapse: collapse; font-size: .78rem; }
+.quote-table th { padding: 8px 5px; background: #242426; color: #fff; text-align: left; font-size: .65rem; letter-spacing: .04em; text-transform: uppercase; }
+.quote-table td { padding: 5px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.quote-table td input, .quote-table td select { min-width: 45px; padding: 6px 4px; font-size: .76rem; }
+.quote-table th:nth-child(1) { width: 10%; }
+.quote-table th:nth-child(2) { width: 25%; }
+.quote-table th:nth-child(3) { width: 8%; }
+.quote-table th:nth-child(4) { width: 8%; }
+.quote-table th:nth-child(5) { width: 17%; }
+.quote-table th:nth-child(6) { width: 8%; }
+.quote-table th:nth-child(7) { width: 18%; text-align: right; }
+.quote-table td:nth-child(7) { text-align: right; white-space: nowrap; font-weight: 700; }
+.quote-empty { color: var(--muted); font-size: .82rem; font-style: italic; }
+.quote-remove { padding: 4px 7px; border: 0; color: var(--muted); }
+.quote-controls { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.quote-primary { border-color: #f17808; background: #f17808; color: #0b0b0d; font-weight: 800; }
+.quote-catalog-picker { margin-top: 15px; padding: 11px; border: 1px solid var(--line); border-radius: 8px; }
+.quote-catalog-picker > label, .quote-catalog-filter { display: block; color: var(--muted); font-size: .72rem; font-weight: 700; }
+.quote-catalog-search-row { display: flex; gap: 8px; margin-top: 5px; }
+.quote-catalog-search-row input { flex: 1; min-width: 0; }
+.quote-catalog-search-row button { flex-shrink: 0; }
+.quote-catalog-hint { margin: 6px 0 0; color: var(--muted); font-size: .75rem; }
+.quote-catalog-manager { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; }
+.quote-catalog-manager > summary { font-size: .86rem; font-weight: 700; }
+.quote-catalog-content > p:first-child { margin: 10px 0; font-size: .78rem; }
+.quote-product-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
+.quote-product-form label { display: grid; gap: 4px; color: var(--muted); font-size: .72rem; font-weight: 700; }
+.quote-product-form input, .quote-product-form select { min-width: 0; font-size: .82rem; }
+.quote-product-form-actions { display: flex; align-items: end; gap: 7px; }
+.quote-product-form-actions button { padding: 7px 9px; font-size: .76rem; }
+.quote-catalog-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; margin-top: 12px; }
+.quote-catalog-tools button, .quote-import-label { padding: 7px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--card); font-size: .76rem; }
+.quote-import-label { display: grid; gap: 5px; color: var(--muted); font-weight: 700; }
+.quote-import-label input { max-width: 230px; font: .74rem var(--font, system-ui); }
+.quote-catalog-filter { margin-top: 12px; }
+.quote-catalog-filter input { margin-top: 4px; font-weight: 400; }
+.quote-catalog-products { display: grid; gap: 6px; max-height: 280px; overflow: auto; margin-top: 8px; }
+.quote-catalog-item { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px; border: 1px solid var(--line); border-radius: 7px; }
+.quote-catalog-item-main { min-width: 0; overflow-wrap: anywhere; }
+.quote-catalog-item-main strong { display: block; font-size: .8rem; }
+.quote-catalog-item-main span { color: var(--muted); font-size: .72rem; }
+.quote-catalog-item-actions { display: flex; flex-shrink: 0; gap: 5px; }
+.quote-catalog-item-actions button { padding: 5px 7px; font-size: .7rem; }
+.quote-status { min-height: 1.25em; margin: 8px 0 0; color: var(--muted); font-size: .8rem; }
+.quote-totals { width: min(100%, 270px); margin: 14px 0 0 auto; }
+.quote-totals > div { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; }
+.quote-grand { margin-top: 5px; padding: 10px 12px !important; background: #0b0b0d; color: #fff; border-right: 5px solid #f17808; font-size: 1.1rem; font-weight: 800; }
+.quote-conditions { margin-top: 16px; padding: 11px 12px; border: 1px solid var(--line); }
+.quote-conditions textarea { width: 100%; resize: vertical; color: var(--fg); font-family: inherit; font-weight: 400; }
+.quote-footer { display: flex; justify-content: space-between; gap: 12px; margin-top: 16px; padding-top: 9px; border-top: 1px solid var(--line); color: var(--muted); font-size: .68rem; }
+.quote-footer strong { color: var(--fg); }
+
+@media (max-width: 580px) {
+  .quote-paper { padding: 10px; }
+  .quote-brand { grid-template-columns: 58px minmax(0, 1fr); gap: 9px; padding: 9px; }
+  .quote-logo { width: 58px; height: 56px; }
+  .quote-brand-name { font-size: 1.1rem; }
+  .quote-brand-tagline { font-size: .58rem; }
+  .quote-ref-wrap { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; }
+  .quote-ref-wrap label { margin: 0; }
+  .quote-fields { grid-template-columns: 1fr 1fr; }
+  .quote-footer { flex-direction: column; }
+  .quote-product-form { grid-template-columns: 1fr 1fr; }
+  .quote-catalog-search-row { flex-direction: column; }
+  .quote-catalog-search-row button { width: 100%; }
+  .quote-catalog-item { align-items: flex-start; flex-direction: column; }
+}
+
+@media print {
+  @page { size: A4; margin: 12mm; }
+  body.print-quote { background: #fff !important; color: #0b0b0d !important; }
+  body.print-quote > header, body.print-quote > main > :not(#presupuestos), body.print-quote > footer { display: none !important; }
+  body.print-quote > main { width: auto; max-width: none; margin: 0; padding: 0; }
+  body.print-quote #presupuestos { display: block !important; margin: 0; }
+  body.print-quote #presupuestos > summary, body.print-quote .no-print,
+  body.print-quote .quote-status, body.print-quote .quote-demo-note,
+  body.print-quote #quote-empty, body.print-quote .quote-remove { display: none !important; }
+  body.print-quote .quote-paper { margin: 0; padding: 0; border: 0; border-radius: 0; background: #fff; color: #0b0b0d; }
+  body.print-quote .quote-brand { background: #0b0b0d !important; color: #fff !important; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  body.print-quote .quote-brand-tagline { color: #d9d9d9 !important; }
+  body.print-quote .quote-ref-wrap label { color: #d9d9d9 !important; }
+  body.print-quote .quote-fields { background: #f5f4f2 !important; color: #0b0b0d; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  body.print-quote .quote-fields label, body.print-quote .quote-conditions { color: #4b4b4b; }
+  body.print-quote .quote-fields input, body.print-quote .quote-ref-wrap input,
+  body.print-quote .quote-table input, body.print-quote .quote-table select,
+  body.print-quote .quote-conditions textarea { border-color: transparent; border-radius: 0; background: transparent; color: #0b0b0d; outline: 0; }
+  body.print-quote .quote-table-wrap { overflow: visible; }
+  body.print-quote .quote-table { min-width: 0; font-size: 8pt; }
+  body.print-quote .quote-table th { background: #242426 !important; color: #fff !important; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  body.print-quote .quote-table th, body.print-quote .quote-table td { padding: 5px 3px; }
+  body.print-quote .quote-table td input, body.print-quote .quote-table td select { font-size: 8pt; padding: 2px 1px; }
+  body.print-quote .quote-grand { background: #0b0b0d !important; color: #fff !important; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  body.print-quote .quote-conditions { min-height: 55px; }
+  body.print-quote .quote-conditions textarea { min-height: 32px; resize: none; }
+}

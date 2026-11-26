@@ -3,6 +3,8 @@
 // Enrolamiento de voces, Modo Dual (Manual / Portero), texto manual, CSV y métricas.
 // Todo lo que viene del servidor o del dictado se pinta con textContent (nunca innerHTML).
 
+import { agregarProductoAlPresupuesto, iniciarPresupuestos } from "./presupuesto.js";
+
 const API = "/api/procesar";
 const LS_PIN = "ferreteria_pin";
 const LS_LOG = "ferreteria_piloto_v2";
@@ -503,6 +505,13 @@ function pintarItem(it) {
       ? el("span", { class: "linea" }, "¿Es alguno de estos? " + candidatos.map((c) => `${c.nombre} (${Math.round(Number(c.similitud) * 100)} %)`).join(" · "))
       : null,
     it.catalogo_error ? el("span", { class: "linea" }, "No pude consultar el catálogo.") : null,
+    it.intencion === "CONSULTA"
+      ? el("button", {
+          type: "button",
+          class: "quote-add",
+          onclick: () => agregarProductoAlPresupuesto(it.producto_estandarizado, it.cantidad, it.medida_o_detalle),
+        }, "Agregar al presupuesto")
+      : null,
   );
 }
 
@@ -657,3 +666,4 @@ if (!SR) {
 }
 pintarBoton();
 render();
+iniciarPresupuestos();

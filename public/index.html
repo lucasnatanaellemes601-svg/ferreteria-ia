@@ -70,6 +70,7 @@
     [hidden] { display: none !important; }
     @media (prefers-reduced-motion: no-preference) { #ptt { transition: box-shadow .12s, background .12s; } }
   </style>
+  <link rel="stylesheet" href="/presupuesto.css">
 </head>
 <body>
   <header>
@@ -101,6 +102,113 @@
         <textarea id="texto-manual" rows="2" maxlength="500" placeholder="Ej: no hay mechas de widia del 6, le di del 8 y se la llevó"></textarea>
         <button type="submit">Analizar</button>
       </form>
+    </details>
+
+    <details id="presupuestos" class="quote-section">
+      <summary>Armar presupuesto</summary>
+      <div id="presupuesto-papel" class="quote-paper">
+        <div class="quote-demo-note" id="quote-screen-note">
+          El catálogo y el borrador se guardan automáticamente en este navegador. Importá un CSV o cargá productos a mano; no se comparte entre computadoras.
+          No consulta stock ni registra una venta.
+        </div>
+
+        <div class="quote-brand">
+          <img src="/assets/ferrmel-logo.png" alt="Logo de FERRMEL Ferretería" class="quote-logo">
+          <div class="quote-brand-copy">
+            <div class="quote-brand-name">FERRMEL</div>
+            <div class="quote-brand-tagline">Ferretería · Soluciones para el hogar y la obra</div>
+          </div>
+          <div class="quote-ref-wrap">
+            <label for="quote-number">PRESUPUESTO</label>
+            <input id="quote-number" aria-label="Número de presupuesto">
+          </div>
+        </div>
+
+        <div class="quote-fields">
+          <label>Cliente / razón social<input id="quote-client" autocomplete="organization" placeholder="Nombre del cliente"></label>
+          <label>CUIT / DNI<input id="quote-tax-id" inputmode="numeric" placeholder="Opcional"></label>
+          <label>Contacto<input id="quote-contact" autocomplete="tel" placeholder="Teléfono o correo"></label>
+          <label>Vendedor<input id="quote-seller" placeholder="Nombre"></label>
+          <label>Fecha<input id="quote-date" type="date"></label>
+          <label>Válido hasta<input id="quote-valid-until" type="date"></label>
+        </div>
+
+        <div class="quote-catalog-picker no-print">
+          <label for="quote-catalog-search">Agregar desde catálogo local</label>
+          <div class="quote-catalog-search-row">
+            <input id="quote-catalog-search" list="quote-catalog-options" placeholder="Buscar por código o descripción" autocomplete="off">
+            <datalist id="quote-catalog-options"></datalist>
+            <button id="quote-add-from-catalog" type="button" class="quote-primary">Agregar producto</button>
+          </div>
+          <p id="quote-catalog-hint" class="quote-catalog-hint">Todavía no cargaste productos. Podés ingresarlos a mano o importar un CSV.</p>
+        </div>
+
+        <details id="quote-catalog-manager" class="quote-catalog-manager no-print">
+          <summary>Administrar catálogo local (<span id="quote-catalog-count">0</span>)</summary>
+          <div class="quote-catalog-content">
+            <p class="muted">Precios netos sin IVA. CSV: codigo;descripcion;unidad;precio_sin_iva;iva. El catálogo queda en este navegador; exportalo para tener una copia.</p>
+            <form id="quote-product-form" class="quote-product-form">
+              <input id="quote-product-id" type="hidden">
+              <label>Código<input id="quote-product-code" required autocomplete="off" placeholder="Código o SKU"></label>
+              <label>Descripción<input id="quote-product-name" required autocomplete="off" placeholder="Nombre del producto"></label>
+              <label>Unidad<input id="quote-product-unit" autocomplete="off" placeholder="un, caja, metro"></label>
+              <label>Precio sin IVA<input id="quote-product-price" required type="number" min="0" step="0.01" placeholder="0,00"></label>
+              <label>IVA
+                <select id="quote-product-iva" required>
+                  <option value="">Elegir alícuota</option>
+                  <option value="0">0%</option>
+                  <option value="2.5">2,5%</option>
+                  <option value="5">5%</option>
+                  <option value="10.5">10,5%</option>
+                  <option value="21">21%</option>
+                  <option value="27">27%</option>
+                </select>
+              </label>
+              <div class="quote-product-form-actions">
+                <button class="quote-primary" type="submit">Guardar producto</button>
+                <button id="quote-product-clear" type="reset">Limpiar</button>
+              </div>
+            </form>
+            <div class="quote-catalog-tools">
+              <label class="quote-import-label" for="quote-catalog-file">Importar CSV<input id="quote-catalog-file" type="file" accept=".csv,text/csv"></label>
+              <button id="quote-catalog-template" type="button">Descargar formato CSV</button>
+              <button id="quote-catalog-export" type="button">Exportar catálogo</button>
+            </div>
+            <label class="quote-catalog-filter">Filtrar productos<input id="quote-catalog-filter" placeholder="Código o descripción"></label>
+            <div id="quote-catalog-products" class="quote-catalog-products"></div>
+            <p id="quote-catalog-status" class="quote-status" role="status" aria-live="polite"></p>
+          </div>
+        </details>
+
+        <div class="quote-table-wrap">
+          <table class="quote-table">
+            <thead><tr><th>Código</th><th>Artículo / descripción</th><th>Cant.</th><th>Unidad</th><th>Precio unit. sin IVA</th><th>IVA</th><th>Subtotal</th><th class="quote-actions-col no-print"></th></tr></thead>
+            <tbody id="quote-items"></tbody>
+          </table>
+          <p id="quote-empty" class="quote-empty">Todavía no agregaste artículos. Podés cargarlos acá o sumar una consulta reconocida por voz.</p>
+        </div>
+
+        <div class="quote-controls no-print">
+          <button id="quote-add-row" type="button">+ Agregar artículo</button>
+          <button id="quote-print" class="quote-primary" type="button">Imprimir / Guardar PDF</button>
+          <button id="quote-new" type="button">Nuevo borrador</button>
+        </div>
+        <p id="quote-status" class="quote-status" role="status" aria-live="polite"></p>
+
+        <div class="quote-totals">
+          <div><span>Neto</span><strong id="quote-net">$ 0,00</strong></div>
+          <div><span>IVA</span><strong id="quote-tax">$ 0,00</strong></div>
+          <div class="quote-grand"><span>TOTAL</span><strong id="quote-total">$ 0,00</strong></div>
+        </div>
+
+        <label class="quote-conditions">Condiciones y observaciones
+          <textarea id="quote-notes" rows="3" placeholder="Forma de pago, entrega, vigencia u otras observaciones"></textarea>
+        </label>
+        <footer class="quote-footer">
+          <span><strong>FERRMEL Ferretería</strong> · Precios y disponibilidad sujetos a confirmación.</span>
+          <span>Documento de presupuesto</span>
+        </footer>
+      </div>
     </details>
 
     <section aria-label="Resultados">
