@@ -28,7 +28,7 @@ const MAX_TEXTO = 500;
 const MAX_AUDIO_B64 = 4_300_000; // Vercel acepta ~4,5 MB de body
 const TIMEOUT_GEMINI_MS = 20_000;
 const TIMEOUT_AUDIO_MS = 40_000;
-const MODELO_POR_DEFECTO = "gemini-3.7-flash"; // figura en la doc de Google; si definís GEMINI_MODEL en Vercel, manda ese
+const MODELO_POR_DEFECTO = "gemini-3.8-flash"; // mantener alineado con .env.example
 
 // Compara PINs sin filtrar información por tiempo ni por largo.
 function mismoSecreto(a, b) {

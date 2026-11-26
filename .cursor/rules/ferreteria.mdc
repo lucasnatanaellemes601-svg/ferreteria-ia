@@ -10,7 +10,7 @@ Herramienta de mostrador: el vendedor dicta con un botón **push-to-talk**, la I
 Proyecto de una sola persona, presupuesto casi cero, Argentina (Misiones). Internet inestable.
 
 ## Stack (no cambiarlo sin preguntar)
-- Frontend: HTML + CSS + JavaScript puro en `public/`. Sin React, sin bundlers, sin frameworks.
+- Frontend: HTML + CSS + JavaScript puro en `public/`. Sin React, sin bundlers, sin frameworks. Incluye modo manual push-to-talk y modo opcional Portero; cerrar los tracks del micrófono al pausar o salir.
 - Dictado: Web Speech API (`es-AR`) controlada por push-to-talk. Alternativa si falla por ruido: Groq/Whisper.
 - Backend: funciones serverless de Vercel en `api/` (Node, ES modules: `"type": "module"`).
 - IA: Gemini con el SDK **`@google/genai`** (`ai.models.generateContent`, `config.responseSchema`).

@@ -110,9 +110,10 @@ la vista `reporte_ventas_vs_faltantes`.
 
 - **El endpoint nunca queda abierto.** Sin `APP_PIN` (o sin sesión de Supabase) responde error; nunca
   sirve "por defecto".
-- **Avisá en el local.** El micrófono solo escucha mientras se aprieta el botón, pero en Chrome y Edge el
-  audio se transcribe en servidores de Google y el texto se manda a Gemini. Poné un cartel y avisá a los
-  empleados (Ley 25.326 de Protección de Datos Personales).
+- **Avisá claramente antes de usar el audio.** El modo manual graba mientras se mantiene apretado el
+  botón. El modo Portero puede escuchar en tramos mientras está activo. El navegador procesa el dictado;
+  además, la app envía el audio completo y las muestras de voz de `voces/` a Gemini para analizarlo e
+  identificar al vendedor. Explicá este flujo al personal antes de usarlo.
 - **Plan gratuito de Gemini:** revisá los términos vigentes. En el nivel gratuito Google puede usar el
   contenido enviado para mejorar sus productos. Si no querés eso, pasá a un plan pago.
 - El PIN se guarda en el navegador y es una protección provisoria hasta que exista el login de la Fase 2.

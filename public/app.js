@@ -104,6 +104,7 @@ ptt.parentNode.insertBefore(toggleDiv, ptt);
 
 $("switch-modo").addEventListener("change", (e) => {
   if (modoEnrolamiento) { e.target.checked = false; alert("Desactivá el modo enrolamiento primero."); return; }
+  mantenerGrabacion = false;
   autoReiniciar = false;
   clearTimeout(timerReinicio);
   detenerGrabacion();
@@ -117,9 +118,12 @@ $("switch-modo").addEventListener("change", (e) => {
 
 // ---------- GRABACIÓN (MediaRecorder) + DICTADO (Web Speech) ----------
 let mediaRecorder = null;
+let streamMicrofono = null;
+let finalizandoGrabacion = false;
 let mimeGrabacion = "";
 let audioChunks = [];
 let grabando = false;
+let mantenerGrabacion = false;
 let autoReiniciar = false;
 let timerReinicio = null;
 let timerCorte = null;
@@ -154,20 +158,50 @@ function extensionDe(mime) {
   return "audio";
 }
 
+function liberarMicrofono() {
+  if (streamMicrofono) {
+    for (const track of streamMicrofono.getTracks()) track.stop();
+  }
+  streamMicrofono = null;
+  mediaRecorder = null;
+  mimeGrabacion = "";
+}
+
+window.addEventListener("pagehide", () => {
+  mantenerGrabacion = false;
+  autoReiniciar = false;
+  clearTimeout(timerReinicio);
+  clearTimeout(timerCorte);
+  if (reconocedor) { try { reconocedor.stop(); } catch { /* nada */ } }
+  if (mediaRecorder) {
+    mediaRecorder.onstop = null;
+    if (mediaRecorder.state !== "inactive") {
+      try { mediaRecorder.stop(); } catch { /* nada */ }
+    }
+  }
+  liberarMicrofono();
+});
+
 async function inicializarMic() {
-  if (mediaRecorder) return true;
+  if (mediaRecorder && streamMicrofono?.active) return true;
+  liberarMicrofono();
   const mime = elegirMime();
   if (mime === null) { setEstado("Este navegador no puede grabar audio."); return false; }
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    streamMicrofono = await navigator.mediaDevices.getUserMedia({ audio: true });
     mimeGrabacion = mime;
-    mediaRecorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+    mediaRecorder = mime ? new MediaRecorder(streamMicrofono, { mimeType: mime }) : new MediaRecorder(streamMicrofono);
     if (!mimeGrabacion) mimeGrabacion = mediaRecorder.mimeType || "audio/webm";
 
     mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunks.push(e.data); };
-    mediaRecorder.onstop = alTerminarGrabacion;
+    mediaRecorder.onstop = () => {
+      finalizandoGrabacion = false;
+      try { alTerminarGrabacion(); }
+      finally { if (!modoAuto || !autoReiniciar) liberarMicrofono(); }
+    };
     return true;
   } catch {
+    liberarMicrofono();
     setEstado("No pude acceder al micrófono. Revisá los permisos del navegador.");
     return false;
   }
@@ -200,11 +234,15 @@ function alTerminarGrabacion() {
 }
 
 async function iniciarGrabacion() {
-  if (grabando) return;
+  if (grabando || finalizandoGrabacion) return;
   if (!pin) { mostrarPin(); setEstado("Primero ingresá el PIN."); return; }
 
   const listo = await inicializarMic();
   if (!listo) return;
+  if ((modoAuto && !autoReiniciar) || (!modoAuto && !mantenerGrabacion)) {
+    liberarMicrofono();
+    return;
+  }
   if (mediaRecorder.state !== "inactive") return; // todavía cerrando la grabación anterior
 
   audioChunks = [];
@@ -237,7 +275,14 @@ async function iniciarGrabacion() {
     catch { setTimeout(() => { try { reconocedor.start(); } catch { /* nada */ } }, 300); }
   }
 
-  mediaRecorder.start();
+  try {
+    mediaRecorder.start();
+  } catch {
+    if (reconocedor && !modoEnrolamiento) { try { reconocedor.stop(); } catch { /* nada */ } }
+    liberarMicrofono();
+    setEstado("No pude iniciar la grabación de audio.");
+    return;
+  }
   grabando = true;
 
   // Portero: corte por tiempo, para no acumular minutos de silencio
@@ -250,9 +295,17 @@ async function iniciarGrabacion() {
 
 function detenerGrabacion() {
   clearTimeout(timerCorte);
-  if (!grabando) return;
+  if (!grabando) {
+    if (!finalizandoGrabacion && (!modoAuto || !autoReiniciar)) liberarMicrofono();
+    return;
+  }
   grabando = false;
-  if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
+  if (mediaRecorder && mediaRecorder.state !== "inactive") {
+    finalizandoGrabacion = true;
+    mediaRecorder.stop();
+  } else if (!modoAuto || !autoReiniciar) {
+    liberarMicrofono();
+  }
   if (reconocedor && !modoEnrolamiento) { try { reconocedor.stop(); } catch { /* nada */ } }
   pintarBoton();
 }
@@ -263,10 +316,15 @@ ptt.addEventListener("pointerdown", (e) => {
   if (modoAuto || e.button !== 0) return;
   e.preventDefault();
   ptt.setPointerCapture(e.pointerId);
+  mantenerGrabacion = true;
   iniciarGrabacion();
 });
-ptt.addEventListener("pointerup", () => { if (!modoAuto) detenerGrabacion(); });
-ptt.addEventListener("pointercancel", () => { if (!modoAuto) detenerGrabacion(); });
+ptt.addEventListener("pointerup", () => {
+  if (!modoAuto) { mantenerGrabacion = false; detenerGrabacion(); }
+});
+ptt.addEventListener("pointercancel", () => {
+  if (!modoAuto) { mantenerGrabacion = false; detenerGrabacion(); }
+});
 
 // Portero: un clic activa, otro clic pausa (también durante la pausa de 300 ms entre tramos)
 function alternarAuto() {
@@ -290,12 +348,12 @@ ptt.addEventListener("click", (e) => {
 document.addEventListener("keydown", (e) => {
   if (e.code !== "Space" || e.repeat || e.target.matches("input, textarea, button")) return;
   e.preventDefault();
-  if (!modoAuto) iniciarGrabacion();
+  if (!modoAuto) { mantenerGrabacion = true; iniciarGrabacion(); }
 });
 document.addEventListener("keyup", (e) => {
   if (e.code !== "Space" || e.target.matches("input, textarea, button")) return;
   e.preventDefault();
-  if (!modoAuto) detenerGrabacion();
+  if (!modoAuto) { mantenerGrabacion = false; detenerGrabacion(); }
   else alternarAuto();
 });
 
@@ -468,11 +526,17 @@ function pintarEntrada(e) {
 
   let btnConfirmacion = null;
   if (conVoz && (requiere_confirmacion || MODO_PRUEBA_VOZ) && !empleado.confirmado) {
+    const opcionesEmpleado = [
+      { valor: "Desconocido", etiqueta: "No es ninguno / desconocido" },
+      ...empleados_posibles
+        .filter((nombre) => nombre !== "Desconocido")
+        .map((nombre) => ({ valor: nombre, etiqueta: nombre })),
+    ];
     btnConfirmacion = el("div", { style: "margin-top: 10px; padding: 10px; background: rgba(239,68,68,0.1); border-radius: 8px;" },
       el("strong", { style: "color: #ef4444; display: block; margin-bottom: 5px;" },
         requiere_confirmacion ? "⚠️ Voz dudosa. ¿Quién atendió?" : "Confirmá quién atendió (prueba de voz)"),
-      ...empleados_posibles.map((nombre) =>
-        el("button", { type: "button", onclick: () => confirmarEmpleado(e.id, nombre), style: "margin-right: 5px; padding: 5px 10px; cursor: pointer;" }, String(nombre))),
+      ...opcionesEmpleado.map(({ valor, etiqueta }) =>
+        el("button", { type: "button", onclick: () => confirmarEmpleado(e.id, valor), style: "margin-right: 5px; padding: 5px 10px; cursor: pointer;" }, etiqueta)),
     );
   }
 
