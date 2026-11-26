@@ -3,7 +3,7 @@
 // Enrolamiento de voces, Modo Dual (Manual / Portero), texto manual, CSV y métricas.
 // Todo lo que viene del servidor o del dictado se pinta con textContent (nunca innerHTML).
 
-import { agregarProductoAlPresupuesto, iniciarPresupuestos } from "./presupuesto.js";
+import { agregarProductoAlPresupuesto, crearPresupuestoDesdeIA, iniciarPresupuestos } from "./presupuesto.js";
 
 const API = "/api/procesar";
 const LS_PIN = "ferreteria_pin";
@@ -423,8 +423,13 @@ async function enviarABackend(blob, mimeType, textoCrudo) {
     if (!Array.isArray(data.items)) { setEstado("Respuesta inesperada del servidor."); return; }
 
     registrar(texto, data);
+    const presupuestoCreado = data.solicita_presupuesto === true && crearPresupuestoDesdeIA(data.items);
     $("transcripcion").textContent = "";
-    setEstado(data.items.length ? "Listo. Revisá el resultado." : "No detecté productos.");
+    setEstado(presupuestoCreado
+      ? "Presupuesto preliminar armado. Revisá el catálogo, completá los datos y confirmá antes de imprimir."
+      : data.solicita_presupuesto
+        ? "Detecté un pedido de presupuesto; mirá el mensaje del módulo para completar el dictado."
+        : data.items.length ? "Listo. Revisá el resultado." : "No detecté productos.");
   } catch {
     if (!blob) {
       $("texto-manual").value = texto;

@@ -193,6 +193,10 @@
           <button id="quote-print" class="quote-primary" type="button">Imprimir / Guardar PDF</button>
           <button id="quote-new" type="button">Nuevo borrador</button>
         </div>
+        <details id="quote-archive" class="quote-archive no-print">
+          <summary>Presupuestos anteriores (<span id="quote-archive-count">0</span>)</summary>
+          <div id="quote-archive-list" class="quote-archive-list"></div>
+        </details>
         <p id="quote-status" class="quote-status" role="status" aria-live="polite"></p>
 
         <div class="quote-totals">
@@ -204,6 +208,14 @@
         <label class="quote-conditions">Condiciones y observaciones
           <textarea id="quote-notes" rows="3" placeholder="Forma de pago, entrega, vigencia u otras observaciones"></textarea>
         </label>
+        <section class="quote-acceptance" aria-label="Aceptacion del presupuesto">
+          <p>Acepto el alcance, los precios y las condiciones indicados en este presupuesto.</p>
+          <div class="quote-signature-row">
+            <div class="quote-signature-line">Firma del cliente</div>
+            <div class="quote-signature-line">Aclaracion y DNI</div>
+            <div class="quote-signature-line">Fecha</div>
+          </div>
+        </section>
         <footer class="quote-footer">
           <span><strong>FERRMEL Ferretería</strong> · Precios y disponibilidad sujetos a confirmación.</span>
           <span>Documento de presupuesto</span>

@@ -2,6 +2,7 @@ const $ = (id) => document.getElementById(id);
 const money = new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS" });
 const LS_CATALOGO = "ferreteria_catalogo_local_v1";
 const LS_BORRADOR = "ferreteria_presupuesto_borrador_v1";
+const LS_ARCHIVO = "ferreteria_presupuestos_anteriores_v1";
 const IVA_PERMITIDOS = [0, 2.5, 5, 10.5, 21, 27];
 
 let catalogo = cargarCatalogo();
@@ -463,8 +464,7 @@ function exportarCatalogoCsv() {
   descargarArchivo("catalogo-ferreteria-local.csv", contenido);
 }
 
-function guardarBorrador() {
-  if (!presupuestoListo) return;
+function obtenerBorrador() {
   const borrador = {
     numero: $("quote-number").value,
     cliente: $("quote-client").value,
@@ -486,13 +486,36 @@ function guardarBorrador() {
       };
     }),
   };
+  return borrador;
+}
+
+function guardarBorrador() {
+  if (!presupuestoListo) return;
+  const borrador = obtenerBorrador();
   if (!guardarLocal(LS_BORRADOR, borrador)) {
     $("quote-status").textContent = "No se pudo guardar el borrador en este navegador. Imprimilo antes de cerrar.";
   }
 }
 
-function cargarBorrador() {
-  const borrador = leerLocal(LS_BORRADOR, null);
+function borradorTieneContenido(borrador) {
+  return Boolean(borrador && (
+    borrador.cliente || borrador.cuit || borrador.contacto || borrador.vendedor || borrador.observaciones ||
+    (Array.isArray(borrador.items) && borrador.items.some((item) => item?.descripcion || item?.codigo || item?.precio))
+  ));
+}
+
+function archivarBorrador(borrador) {
+  if (!borradorTieneContenido(borrador)) return false;
+  const guardados = leerLocal(LS_ARCHIVO, []);
+  const lista = Array.isArray(guardados) ? guardados : [];
+  const id = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  lista.unshift({ id, fecha: new Date().toISOString(), borrador });
+  if (!guardarLocal(LS_ARCHIVO, lista.slice(0, 20))) return false;
+  renderizarArchivados();
+  return true;
+}
+
+function aplicarBorrador(borrador) {
   if (!borrador || typeof borrador !== "object" || Array.isArray(borrador)) return false;
   $("quote-number").value = String(borrador.numero || nuevaReferencia());
   $("quote-client").value = String(borrador.cliente || "");
@@ -517,6 +540,52 @@ function cargarBorrador() {
   }
   if (!$("quote-items").rows.length) crearFila();
   return true;
+}
+
+function cargarBorrador() {
+  return aplicarBorrador(leerLocal(LS_BORRADOR, null));
+}
+
+function renderizarArchivados() {
+  const destino = $("quote-archive-list");
+  const contador = $("quote-archive-count");
+  if (!destino || !contador) return;
+  const archivo = leerLocal(LS_ARCHIVO, []);
+  const lista = Array.isArray(archivo) ? archivo : [];
+  contador.textContent = String(lista.length);
+  destino.replaceChildren();
+  if (!lista.length) {
+    const vacio = document.createElement("p");
+    vacio.className = "quote-empty";
+    vacio.textContent = "Todavia no hay presupuestos guardados.";
+    destino.append(vacio);
+    return;
+  }
+  for (const entrada of lista) {
+    if (!entrada?.borrador) continue;
+    const fila = document.createElement("div");
+    fila.className = "quote-archive-item";
+    const titulo = document.createElement("span");
+    const fecha = new Date(entrada.fecha || "").toLocaleDateString("es-AR");
+    titulo.textContent = `${entrada.borrador.numero || "Presupuesto"} | ${entrada.borrador.cliente || "Sin cliente"} | ${fecha}`;
+    const abrir = document.createElement("button");
+    abrir.type = "button";
+    abrir.textContent = "Abrir";
+    abrir.addEventListener("click", () => {
+      const actual = obtenerBorrador();
+      if (borradorTieneContenido(actual) && !archivarBorrador(actual)) {
+        $("quote-status").textContent = "No pude guardar el borrador actual; no lo reemplacé.";
+        return;
+      }
+      aplicarBorrador(entrada.borrador);
+      guardarBorrador();
+      $("presupuestos").open = true;
+      $("quote-status").textContent = "Borrador anterior recuperado.";
+      $("presupuestos").scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    fila.append(titulo, abrir);
+    destino.append(fila);
+  }
 }
 
 function validarAntesDeImprimir() {
@@ -563,6 +632,7 @@ export function iniciarPresupuestos() {
   if (!borradorRestaurado) crearFila();
   presupuestoListo = true;
   actualizarCatalogo();
+  renderizarArchivados();
   if (!borradorRestaurado) guardarBorrador();
 
   $("presupuesto-papel").addEventListener("input", () => { recalcular(); guardarBorrador(); });
@@ -605,6 +675,56 @@ export function iniciarPresupuestos() {
   });
   window.addEventListener("afterprint", () => document.body.classList.remove("print-quote"));
   if (!guardarLocal(LS_CATALOGO, catalogo)) $("quote-catalog-status").textContent = "El navegador no permite guardar el catálogo local.";
+}
+
+export function crearPresupuestoDesdeIA(items = []) {
+  if (!presupuestoListo || !Array.isArray(items)) return false;
+  const solicitados = items
+    .filter((item) => item && item.intencion === "CONSULTA" && typeof item.producto_estandarizado === "string" && item.producto_estandarizado.trim())
+    .slice(0, 20);
+  if (!solicitados.length) {
+    $("presupuestos").open = true;
+    $("quote-status").textContent = "La IA detectó un pedido de presupuesto, pero no pudo identificar artículos. Dictá los productos y cantidades con más detalle.";
+    $("presupuestos").scrollIntoView({ behavior: "smooth", block: "start" });
+    return false;
+  }
+
+  const borradorActual = obtenerBorrador();
+  const tieneBorradorActual = borradorTieneContenido(borradorActual);
+  const archivado = tieneBorradorActual && archivarBorrador(borradorActual);
+  if (tieneBorradorActual && !archivado) {
+    $("presupuestos").open = true;
+    $("quote-status").textContent = "No pude guardar el borrador actual en Presupuestos anteriores; no lo reemplacé. Guardá una copia o liberá espacio y volvé a intentarlo.";
+    $("presupuestos").scrollIntoView({ behavior: "smooth", block: "start" });
+    return false;
+  }
+  for (const id of ["quote-client", "quote-tax-id", "quote-contact", "quote-seller", "quote-notes"]) $(id).value = "";
+  $("quote-items").replaceChildren();
+  inicializarCampos();
+
+  let encontrados = 0;
+  for (const item of solicitados) {
+    const nombre = item.producto_estandarizado.trim();
+    const detalle = typeof item.medida_o_detalle === "string" ? item.medida_o_detalle.trim() : "";
+    const coincidencia = catalogoCoincidente(nombre, detalle);
+    if (coincidencia) encontrados++;
+    crearFila({
+      codigo: coincidencia?.codigo || "",
+      descripcion: coincidencia?.descripcion || [nombre, detalle].filter(Boolean).join(" - "),
+      cantidad: Number(item.cantidad) > 0 ? Number(item.cantidad) : 1,
+      unidad: coincidencia?.unidad || "",
+      precio: coincidencia ? String(coincidencia.precioNeto) : "",
+      iva: coincidencia ? String(coincidencia.iva) : "",
+    });
+  }
+  $("presupuestos").open = true;
+  const pendientes = solicitados.length - encontrados;
+  $("quote-status").textContent = `Borrador creado desde voz/texto: ${solicitados.length} articulo(s). ${encontrados} coincidieron exactamente con el catalogo${pendientes ? `; completa precio e IVA en ${pendientes} pendiente(s)` : "; revisa precios y datos del cliente"}.${archivado ? " El borrador anterior quedo guardado en Presupuestos anteriores." : ""}`;
+  guardarBorrador();
+  $("presupuestos").scrollIntoView({ behavior: "smooth", block: "start" });
+  const primeroIncompleto = Array.from($("quote-items").rows).find((fila) => !fila.querySelector("input[aria-label='Precio unitario sin IVA']").value);
+  if (primeroIncompleto) primeroIncompleto.querySelector("input[aria-label='Precio unitario sin IVA']").focus({ preventScroll: true });
+  return true;
 }
 
 export function agregarProductoAlPresupuesto(nombre, cantidad = 1, detalle = "") {

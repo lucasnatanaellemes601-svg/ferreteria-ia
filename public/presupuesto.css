@@ -39,6 +39,15 @@
 .quote-empty { color: var(--muted); font-size: .82rem; font-style: italic; }
 .quote-remove { padding: 4px 7px; border: 0; color: var(--muted); }
 .quote-controls { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.quote-archive { margin-top: 10px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; }
+.quote-archive > summary { font-size: .82rem; font-weight: 700; }
+.quote-archive-list { display: grid; gap: 7px; margin-top: 8px; }
+.quote-archive-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px; border: 1px solid var(--line); border-radius: 7px; font-size: .78rem; }
+.quote-archive-item span { min-width: 0; overflow-wrap: anywhere; }
+.quote-acceptance { margin-top: 22px; font-size: .78rem; }
+.quote-acceptance > p { margin: 0 0 28px; }
+.quote-signature-row { display: grid; grid-template-columns: 1.5fr 1fr .7fr; gap: 24px; }
+.quote-signature-line { min-height: 34px; padding-top: 23px; border-top: 1px solid currentColor; color: var(--muted); font-size: .7rem; }
 .quote-primary { border-color: #f17808; background: #f17808; color: #0b0b0d; font-weight: 800; }
 .quote-catalog-picker { margin-top: 15px; padding: 11px; border: 1px solid var(--line); border-radius: 8px; }
 .quote-catalog-picker > label, .quote-catalog-filter { display: block; color: var(--muted); font-size: .72rem; font-weight: 700; }
@@ -118,4 +127,6 @@
   body.print-quote .quote-grand { background: #0b0b0d !important; color: #fff !important; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
   body.print-quote .quote-conditions { min-height: 55px; }
   body.print-quote .quote-conditions textarea { min-height: 32px; resize: none; }
+  body.print-quote .quote-acceptance { break-inside: avoid; color: #0b0b0d; }
+  body.print-quote .quote-signature-line { color: #4b4b4b; }
 }

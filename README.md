@@ -44,6 +44,10 @@ El catálogo admite carga manual e importación CSV con las columnas `codigo;des
 
 Instrucciones de carga inicial: `docs/catalogo-local.md`.
 
+Si el vendedor pide explícitamente un presupuesto por voz o texto, la app crea un borrador nuevo con los productos y cantidades reconocidos. Solo completa código, precio e IVA cuando encuentra una descripción exactamente igual en el catálogo local; los renglones sin coincidencia quedan para completar y revisar. Si ya había un borrador con datos, lo conserva en **Presupuestos anteriores**. El cliente, el vendedor y los precios deben revisarse antes de imprimir.
+
+El PDF incluye una aceptación opcional para firma manuscrita del cliente. El nombre de FERRMEL y el vendedor identifican a quien emite la propuesta; no se agrega una firma digital de la ferretería.
+
 ## Gestión
 
 El punto de extensión y las variables de entorno están reservados en `lib/gestion/adapter.js` y `.env.example`. El adaptador está forzado a desactivado y no hace solicitudes de red. Revisá `docs/integraciones/gestion.md` antes de cargar credenciales: una llave sola no alcanza sin la URL, el método de autenticación y la documentación de la API oficial.

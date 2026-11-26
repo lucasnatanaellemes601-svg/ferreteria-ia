@@ -1,6 +1,6 @@
 // POST /api/procesar
-//   { texto: "..." }                            → { modo, items }
-//   { audioBase64, mimeType, texto? (apoyo) }   → { modo, items, empleado, requiere_confirmacion, empleados_posibles }
+//   { texto: "..." }                            → { modo, solicita_presupuesto, items }
+//   { audioBase64, mimeType, texto? (apoyo) }   → { modo, solicita_presupuesto, items, empleado, requiere_confirmacion, empleados_posibles }
 //
 // Modo texto: igual que antes (Gemini + Zod + catálogo de Supabase si está configurado).
 // Modo audio: además identifica al empleado comparando con sus voces de /voces.
@@ -178,6 +178,7 @@ export function crearHandler({
 
     let items;
     let empleado = null;
+    let solicitaPresupuesto = false;
     try {
       const ai = crearIA(env.GEMINI_API_KEY);
       const respuesta = await ai.models.generateContent({
@@ -203,8 +204,10 @@ export function crearHandler({
       if (esAudio) {
         items = validado.data.items;
         empleado = validado.data.empleado;
+        solicitaPresupuesto = validado.data.solicita_presupuesto;
       } else {
-        items = validado.data;
+        items = validado.data.items;
+        solicitaPresupuesto = validado.data.solicita_presupuesto;
       }
     } catch (e) {
       console.error("gemini:", e?.status ?? "", e?.message ?? e);
@@ -216,7 +219,7 @@ export function crearHandler({
 
     if (auth.modo === "completo") items = await buscarEnCatalogo(auth.supabase, items);
 
-    const salida = { modo: auth.modo, items };
+    const salida = { modo: auth.modo, items, solicita_presupuesto: solicitaPresupuesto };
 
     if (esAudio) {
       // Si el nombre no es uno de los enrolados, se trata como desconocido.
