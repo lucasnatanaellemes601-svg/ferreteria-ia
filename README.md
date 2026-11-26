@@ -38,13 +38,13 @@ ferreteria-ia/
 
 ## Presupuestos (piloto)
 
-La pantalla permite armar e imprimir un presupuesto con logo, datos del cliente, artículos, IVA, totales y condiciones. Los artículos detectados como consultas por voz se pueden agregar; si hay una coincidencia exacta en el catálogo local, también carga el precio neto y el IVA guardados allí.
+La pantalla permite armar e imprimir un presupuesto con logo, datos del cliente, artículos, IVA, totales, condiciones y estado de stock. Ante un pedido explícito, la IA arma el borrador con los productos y cantidades reconocidos.
 
-El catálogo admite carga manual e importación CSV con las columnas `codigo;descripcion;unidad;precio_sin_iva;iva`. La app guarda el catálogo y un borrador activo en el almacenamiento local del navegador. Exportá el catálogo para tener una copia. Estos datos no se comparten entre computadoras ni consultan el catálogo de Gestión. Cada presupuesto debe revisarse antes de imprimir; el módulo no registra ventas ni modifica stock.
+El catálogo admite carga manual e importación CSV de Gestión. La app guarda el catálogo y un borrador activo en el almacenamiento local del navegador. Exportá el catálogo para tener una copia. Estos datos no se comparten entre computadoras ni se sincronizan en vivo con Gestión. Cada presupuesto debe revisarse antes de imprimir; el módulo no registra ventas ni modifica stock.
 
 Instrucciones de carga inicial: `docs/catalogo-local.md`.
 
-Si el vendedor pide explícitamente un presupuesto por voz o texto, la app crea un borrador nuevo con los productos y cantidades reconocidos. Solo completa código, precio e IVA cuando encuentra una descripción exactamente igual en el catálogo local; los renglones sin coincidencia quedan para completar y revisar. Si ya había un borrador con datos, lo conserva en **Presupuestos anteriores**. El cliente, el vendedor y los precios deben revisarse antes de imprimir.
+Si el vendedor pide explícitamente un presupuesto por voz o texto, la app crea un borrador nuevo con los productos y cantidades reconocidos. Vincula un artículo solo si encuentra una coincidencia única en el catálogo; los renglones sin coincidencia quedan para completar y revisar. Con los datos importados de Gestión puede cargar el código, el stock y el precio de lista 1 con IVA incluido. Ese precio se usa como importe final para no sumar el impuesto dos veces; la tasa CIVA no se desglosa hasta tener su equivalencia. Si ya había un borrador con datos, lo conserva en **Presupuestos anteriores**. El cliente, el vendedor y los precios deben revisarse antes de imprimir.
 
 El PDF incluye una aceptación opcional para firma manuscrita del cliente. El nombre de FERRMEL y el vendedor identifican a quien emite la propuesta; no se agrega una firma digital de la ferretería.
 

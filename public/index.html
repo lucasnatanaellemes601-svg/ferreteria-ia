@@ -108,8 +108,8 @@
       <summary>Armar presupuesto</summary>
       <div id="presupuesto-papel" class="quote-paper">
         <div class="quote-demo-note" id="quote-screen-note">
-          El catálogo y el borrador se guardan automáticamente en este navegador. Importá un CSV o cargá productos a mano; no se comparte entre computadoras.
-          No consulta stock ni registra una venta.
+          El catálogo y el borrador se guardan en este navegador. El stock llega del último Excel de Gestión que importes; no se actualiza en vivo ni se comparte entre computadoras.
+          La app no modifica stock ni registra una venta.
         </div>
 
         <div class="quote-brand">
@@ -146,7 +146,7 @@
         <details id="quote-catalog-manager" class="quote-catalog-manager no-print">
           <summary>Administrar catálogo local (<span id="quote-catalog-count">0</span>)</summary>
           <div class="quote-catalog-content">
-            <p class="muted">Precios netos sin IVA. CSV: codigo;descripcion;unidad;precio_sin_iva;iva. El catálogo queda en este navegador; exportalo para tener una copia.</p>
+            <p class="muted">Los precios cargados a mano son netos sin IVA. El CSV de Gestión importa código, descripción, lista 1 con IVA y stock del depósito exportado. El catálogo queda en este navegador; exportalo para tener una copia.</p>
             <form id="quote-product-form" class="quote-product-form">
               <input id="quote-product-id" type="hidden">
               <label>Código<input id="quote-product-code" required autocomplete="off" placeholder="Código o SKU"></label>
@@ -182,9 +182,10 @@
 
         <div class="quote-table-wrap">
           <table class="quote-table">
-            <thead><tr><th>Código</th><th>Artículo / descripción</th><th>Cant.</th><th>Unidad</th><th>Precio unit. sin IVA</th><th>IVA</th><th>Subtotal</th><th class="quote-actions-col no-print"></th></tr></thead>
+            <thead><tr><th>Código</th><th>Artículo / descripción</th><th>Cant.</th><th>Unidad</th><th>Precio unitario</th><th>IVA</th><th>Subtotal</th><th>Stock / faltante / llegada</th><th class="quote-actions-col no-print"></th></tr></thead>
             <tbody id="quote-items"></tbody>
           </table>
+          <p class="quote-pricing-help no-print">Las líneas que muestran “Incluido (Gestión)” ya tienen IVA en el precio. Si elegís una alícuota, ese precio pasa a tratarse como neto y se suma el impuesto.</p>
           <p id="quote-empty" class="quote-empty">Todavía no agregaste artículos. Podés cargarlos acá o sumar una consulta reconocida por voz.</p>
         </div>
 
@@ -200,10 +201,12 @@
         <p id="quote-status" class="quote-status" role="status" aria-live="polite"></p>
 
         <div class="quote-totals">
-          <div><span>Neto</span><strong id="quote-net">$ 0,00</strong></div>
-          <div><span>IVA</span><strong id="quote-tax">$ 0,00</strong></div>
+          <div id="quote-net-row"><span>Neto</span><strong id="quote-net">$ 0,00</strong></div>
+          <div id="quote-tax-row"><span>IVA</span><strong id="quote-tax">$ 0,00</strong></div>
+          <p id="quote-tax-included-note" class="quote-tax-note" hidden></p>
           <div class="quote-grand"><span>TOTAL</span><strong id="quote-total">$ 0,00</strong></div>
         </div>
+        <p id="quote-stock-note" class="quote-stock-note" hidden></p>
 
         <label class="quote-conditions">Condiciones y observaciones
           <textarea id="quote-notes" rows="3" placeholder="Forma de pago, entrega, vigencia u otras observaciones"></textarea>

@@ -1,9 +1,11 @@
 const $ = (id) => document.getElementById(id);
 const money = new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS" });
+const cantidadFormato = new Intl.NumberFormat("es-AR", { maximumFractionDigits: 2 });
 const LS_CATALOGO = "ferreteria_catalogo_local_v1";
 const LS_BORRADOR = "ferreteria_presupuesto_borrador_v1";
 const LS_ARCHIVO = "ferreteria_presupuestos_anteriores_v1";
 const IVA_PERMITIDOS = [0, 2.5, 5, 10.5, 21, 27];
+const IVA_INCLUIDO_GESTION = "INCLUIDO_GESTION";
 
 let catalogo = cargarCatalogo();
 let presupuestoListo = false;
@@ -26,6 +28,12 @@ function guardarLocal(clave, valor) {
   }
 }
 
+function numeroOpcional(valor) {
+  if (valor === null || valor === undefined || valor === "") return null;
+  const numero = Number(valor);
+  return Number.isFinite(numero) ? numero : null;
+}
+
 function cargarCatalogo() {
   const guardado = leerLocal(LS_CATALOGO, []);
   if (!Array.isArray(guardado)) return [];
@@ -34,11 +42,23 @@ function cargarCatalogo() {
     .map((p) => ({
       codigo: String(p.codigo ?? "").trim(),
       descripcion: String(p.descripcion ?? "").trim(),
+      alias: String(p.alias ?? "").trim(),
       unidad: String(p.unidad ?? "").trim(),
-      precioNeto: Number(p.precioNeto),
-      iva: Number(p.iva),
+      precioNeto: numeroOpcional(p.precioNeto),
+      iva: numeroOpcional(p.iva),
+      precioLista1ConIva: numeroOpcional(p.precioLista1ConIva),
+      codigoIva: String(p.codigoIva ?? "").trim(),
+      stock: numeroOpcional(p.stock),
+      estadoStock: String(p.estadoStock ?? "").trim(),
+      deposito: String(p.deposito ?? "").trim(),
+      fechaStock: String(p.fechaStock ?? "").trim(),
+      origen: String(p.origen ?? "").trim(),
     }))
-    .filter((p) => p.codigo && p.descripcion && Number.isFinite(p.precioNeto) && p.precioNeto >= 0 && IVA_PERMITIDOS.includes(p.iva));
+    .filter((p) => p.codigo && p.descripcion && (
+      (Number.isFinite(p.precioNeto) && p.precioNeto >= 0 && IVA_PERMITIDOS.includes(p.iva)) ||
+      (Number.isFinite(p.precioLista1ConIva) && p.precioLista1ConIva >= 0) ||
+      Number.isFinite(p.stock) || p.estadoStock
+    ));
 }
 
 function fechaLocal(date = new Date()) {
@@ -84,6 +104,10 @@ function crearSelectIva(valor = "") {
   placeholder.value = "";
   placeholder.textContent = "Elegir";
   select.append(placeholder);
+  const incluido = document.createElement("option");
+  incluido.value = IVA_INCLUIDO_GESTION;
+  incluido.textContent = "Incluido (Gestión)";
+  select.append(incluido);
   for (const tasa of IVA_PERMITIDOS) {
     const option = document.createElement("option");
     option.value = String(tasa);
@@ -94,13 +118,13 @@ function crearSelectIva(valor = "") {
   return select;
 }
 
-function crearFila({ codigo = "", descripcion = "", cantidad = 1, unidad = "", precio = "", iva = "" } = {}) {
+function crearFila({ codigo = "", descripcion = "", cantidad = 1, unidad = "", precio = "", iva = "", stockTexto = "No vinculado al catálogo", stockFuente: fuente = "", stockCantidad = null, stockUnidad = unidad, stockFaltanteManual = false, sinStock = false, entrega = "" } = {}) {
   const tr = document.createElement("tr");
   const code = crearInput({ label: "Código", value: codigo, placeholder: "Código" });
   const name = crearInput({ label: "Artículo o descripción", value: descripcion, placeholder: "Descripción" });
   const qty = crearInput({ label: "Cantidad", value: String(cantidad), type: "number", step: "0.01", min: "0.01" });
   const unit = crearInput({ label: "Unidad", value: unidad, placeholder: "un, caja, m" });
-  const unitPrice = crearInput({ label: "Precio unitario sin IVA", value: precio, placeholder: "Completar", type: "number", step: "0.01", min: "0" });
+  const unitPrice = crearInput({ label: "Precio unitario", value: precio, placeholder: iva === IVA_INCLUIDO_GESTION ? "Precio Gestión" : "Completar", type: "number", step: "0.01", min: "0" });
   const tax = crearSelectIva(iva);
 
   crearCelda(tr, code);
@@ -113,6 +137,35 @@ function crearFila({ codigo = "", descripcion = "", cantidad = 1, unidad = "", p
   subtotal.className = "quote-line-total";
   subtotal.textContent = money.format(0);
   crearCelda(tr, subtotal);
+
+  const stockCell = document.createElement("td");
+  stockCell.className = "quote-stock-cell";
+  stockCell.dataset.source = fuente;
+  stockCell.dataset.stock = Number.isFinite(stockCantidad) ? String(stockCantidad) : "";
+  stockCell.dataset.unit = stockUnidad || "unidades";
+  stockCell.dataset.manualShortage = stockFaltanteManual ? "true" : "false";
+  const stockInfo = document.createElement("span");
+  stockInfo.className = "quote-stock-text";
+  stockInfo.textContent = stockTexto;
+  const faltaLabel = document.createElement("label");
+  faltaLabel.className = "quote-stock-check";
+  const falta = document.createElement("input");
+  falta.type = "checkbox";
+  falta.setAttribute("aria-label", "Marcar faltante o stock insuficiente");
+  falta.checked = Boolean(sinStock);
+  const faltaTexto = document.createElement("span");
+  faltaTexto.textContent = "Hay faltante";
+  faltaLabel.append(falta, faltaTexto);
+  const entregaInput = crearInput({ label: "Reposición o llegada", value: entrega, placeholder: "Reposición / llegada" });
+  entregaInput.className = "quote-arrival";
+  entregaInput.maxLength = 100;
+  falta.addEventListener("change", () => {
+    stockCell.dataset.manualShortage = "true";
+    if (falta.checked && !entregaInput.value.trim()) entregaInput.value = "A confirmar";
+    else if (!falta.checked && entregaInput.value.trim() === "A confirmar") entregaInput.value = "";
+  });
+  stockCell.append(stockInfo, faltaLabel, entregaInput);
+  tr.append(stockCell);
 
   const remove = document.createElement("button");
   remove.type = "button";
@@ -146,6 +199,10 @@ function leerFilas() {
       precioTexto: inputs[4].value.trim(),
       precio: Number(inputs[4].value),
       iva: tax.value,
+      stockTexto: tr.querySelector(".quote-stock-text")?.textContent || "No verificado",
+      stockFuente: tr.querySelector(".quote-stock-cell")?.dataset.source || "",
+      sinStock: Boolean(tr.querySelector("input[aria-label='Marcar faltante o stock insuficiente']")?.checked),
+      entrega: tr.querySelector("input[aria-label='Reposición o llegada']")?.value.trim() || "",
       activo: Boolean(inputs[0].value.trim() || inputs[1].value.trim() || inputs[4].value.trim() || tax.value),
     };
   });
@@ -155,11 +212,17 @@ function recalcular() {
   if (!$("quote-items")) return;
   let neto = 0;
   let ivaTotal = 0;
+  let precioGestionIncluido = false;
+  const fuentesStock = new Set();
   for (const row of leerFilas()) {
     const cantidad = Number.isFinite(row.cantidad) && row.cantidad > 0 ? row.cantidad : 0;
+    actualizarStockFila(row.tr, cantidad);
     const precio = Number.isFinite(row.precio) && row.precio >= 0 ? row.precio : 0;
     const base = Math.round((cantidad * precio + Number.EPSILON) * 100) / 100;
-    const impuesto = row.iva === "" ? 0 : Math.round((base * Number(row.iva) / 100 + Number.EPSILON) * 100) / 100;
+    const incluido = row.iva === IVA_INCLUIDO_GESTION;
+    if (incluido) precioGestionIncluido = true;
+    if (row.stockFuente) fuentesStock.add(row.stockFuente);
+    const impuesto = row.iva === "" || incluido ? 0 : Math.round((base * Number(row.iva) / 100 + Number.EPSILON) * 100) / 100;
     neto += base;
     ivaTotal += impuesto;
     row.tr.querySelector(".quote-line-total").textContent = money.format(base + impuesto);
@@ -167,6 +230,16 @@ function recalcular() {
   $("quote-net").textContent = money.format(neto);
   $("quote-tax").textContent = money.format(ivaTotal);
   $("quote-total").textContent = money.format(neto + ivaTotal);
+  $("quote-net-row").hidden = precioGestionIncluido;
+  $("quote-tax-row").hidden = precioGestionIncluido;
+  $("quote-tax-included-note").hidden = !precioGestionIncluido;
+  if (precioGestionIncluido) {
+    $("quote-tax-included-note").textContent = "El precio de lista 1 de Gestión ya incluye IVA. El Excel informa un código CIVA, pero no la alícuota; por eso no se desglosa ni se suma IVA otra vez. El total suma los importes finales mostrados.";
+  }
+  $("quote-stock-note").hidden = fuentesStock.size === 0;
+  $("quote-stock-note").textContent = fuentesStock.size
+    ? `Stock según exportación de ${Array.from(fuentesStock).join("; ")}. Es una foto del momento de exportación; confirmá disponibilidad antes de cerrar la venta.`
+    : "";
   $("quote-empty").hidden = $("quote-items").rows.length > 0;
 }
 
@@ -187,6 +260,7 @@ function normalizarClave(valor) {
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
+    .replace(/(\d)\s*mm\b/g, "$1mm")
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
 }
@@ -199,30 +273,91 @@ function etiquetaProducto(producto) {
   return `${producto.codigo} · ${producto.descripcion}`;
 }
 
+function textoStock(producto, cantidadSolicitada = 1) {
+  if (!producto) return "No vinculado al catálogo";
+  if (!Number.isFinite(producto.stock)) return "Stock no informado en el archivo";
+  const stock = producto.stock;
+  const unidad = producto.unidad || "unidades";
+  if (stock < 0) return `Stock negativo en Gestión: ${cantidadFormato.format(stock)} ${unidad}`;
+  if (stock === 0) return "Sin stock según Gestión";
+  if (stock < Number(cantidadSolicitada || 1)) return `Parcial: hay ${cantidadFormato.format(stock)} ${unidad}`;
+  return `Hay ${cantidadFormato.format(stock)} ${unidad}`;
+}
+
+function actualizarStockFila(tr, cantidadSolicitada) {
+  const celda = tr.querySelector(".quote-stock-cell");
+  if (!celda || celda.dataset.stock === "") return;
+  const stock = Number(celda.dataset.stock);
+  if (!Number.isFinite(stock)) return;
+  const unidad = celda.dataset.unit || "unidades";
+  const texto = tr.querySelector(".quote-stock-text");
+  const falta = celda.querySelector("input[aria-label='Marcar faltante o stock insuficiente']");
+  const llegada = celda.querySelector("input[aria-label='Reposición o llegada']");
+  if (stock < 0) texto.textContent = `Stock negativo en Gestión: ${cantidadFormato.format(stock)} ${unidad}`;
+  else if (stock === 0) texto.textContent = "Sin stock según Gestión";
+  else if (stock < cantidadSolicitada) texto.textContent = `Parcial: hay ${cantidadFormato.format(stock)} ${unidad}`;
+  else texto.textContent = `Hay ${cantidadFormato.format(stock)} ${unidad}`;
+  if (celda.dataset.manualShortage !== "true") {
+    falta.checked = stock < cantidadSolicitada;
+    if (falta.checked && !llegada.value.trim()) llegada.value = "A confirmar";
+    else if (!falta.checked && llegada.value.trim() === "A confirmar") llegada.value = "";
+  }
+}
+
+function fuenteStock(producto) {
+  if (!producto || (!producto.origen && !producto.fechaStock && !producto.deposito)) return "";
+  return [producto.origen || "Gestión", producto.deposito, producto.fechaStock].filter(Boolean).join(" · ");
+}
+
 function catalogoCoincidente(nombre, detalle = "") {
   const buscado = normalizarClave([nombre, detalle].filter(Boolean).join(" "));
   if (!buscado) return null;
-  const coincidencias = catalogo.filter((p) => normalizarClave(p.descripcion) === buscado);
-  return coincidencias.length === 1 ? coincidencias[0] : null;
+  const coincidenciasExactas = catalogo.filter((p) =>
+    normalizarClave(p.descripcion) === buscado || (p.alias && normalizarClave(p.alias) === buscado),
+  );
+  if (coincidenciasExactas.length === 1) return coincidenciasExactas[0];
+  if (coincidenciasExactas.length > 1) return null;
+
+  const stopWords = new Set(["de", "del", "para", "por", "con", "el", "la", "los", "las", "un", "una", "y"]);
+  const terminos = buscado.split(" ").filter((t) => t.length > 1 && !stopWords.has(t));
+  if (!terminos.length) return null;
+  const candidatas = catalogo.filter((p) => {
+    const texto = new Set(normalizarClave(`${p.descripcion} ${p.alias || ""}`).split(" "));
+    return terminos.every((termino) => texto.has(termino));
+  });
+  return candidatas.length === 1 ? candidatas[0] : null;
 }
 
 function agregarDesdeCatalogo(producto) {
+  const tieneNeto = Number.isFinite(producto.precioNeto) && IVA_PERMITIDOS.includes(producto.iva);
+  const precio = tieneNeto ? String(producto.precioNeto) : Number.isFinite(producto.precioLista1ConIva) ? String(producto.precioLista1ConIva) : "";
+  const iva = tieneNeto ? String(producto.iva) : precio ? IVA_INCLUIDO_GESTION : "";
   const fila = crearFila({
     codigo: producto.codigo,
     descripcion: producto.descripcion,
     cantidad: 1,
     unidad: producto.unidad,
-    precio: String(producto.precioNeto),
-    iva: String(producto.iva),
+    precio,
+    iva,
+    stockTexto: textoStock(producto),
+    stockFuente: fuenteStock(producto),
+    stockCantidad: producto.stock,
+    stockUnidad: producto.unidad,
+    sinStock: Number.isFinite(producto.stock) && producto.stock < 1,
+    entrega: Number.isFinite(producto.stock) && producto.stock < 1 ? "A confirmar" : "",
   });
-  $("quote-status").textContent = "Artículo agregado del catálogo local. Confirmá que el precio y el IVA sigan vigentes.";
+  $("quote-status").textContent = tieneNeto
+    ? "Artículo agregado del catálogo local. Confirmá que el precio y el IVA sigan vigentes."
+    : "Artículo agregado desde Gestión. El precio de lista 1 ya incluye IVA; revisá la disponibilidad del stock exportado.";
   fila.querySelector("input[aria-label='Cantidad']").focus({ preventScroll: true });
 }
 
 function actualizarCatalogo() {
   const opciones = $("quote-catalog-options");
   opciones.replaceChildren();
-  for (const producto of catalogo) {
+  const filtro = normalizarClave($("quote-catalog-search")?.value || "");
+  const sugerencias = catalogo.filter((producto) => !filtro || normalizarClave(`${producto.codigo} ${producto.descripcion} ${producto.alias}`).includes(filtro)).slice(0, 120);
+  for (const producto of sugerencias) {
     const option = document.createElement("option");
     option.value = etiquetaProducto(producto);
     opciones.append(option);
@@ -239,7 +374,7 @@ function renderizarProductosCatalogo() {
   if (!destino) return;
   const filtro = normalizarClave($("quote-catalog-filter")?.value);
   const productos = catalogo
-    .filter((p) => !filtro || normalizarClave(`${p.codigo} ${p.descripcion}`).includes(filtro))
+    .filter((p) => !filtro || normalizarClave(`${p.codigo} ${p.descripcion} ${p.alias}`).includes(filtro))
     .sort((a, b) => a.descripcion.localeCompare(b.descripcion, "es"));
   destino.replaceChildren();
   for (const producto of productos.slice(0, 300)) {
@@ -250,7 +385,17 @@ function renderizarProductosCatalogo() {
     const name = document.createElement("strong");
     name.textContent = `${producto.codigo} · ${producto.descripcion}`;
     const detail = document.createElement("span");
-    detail.textContent = `${producto.unidad || "sin unidad"} · Neto ${money.format(producto.precioNeto)} · IVA ${String(producto.iva).replace(".", ",")}%`;
+    const datos = [producto.unidad || "sin unidad"];
+    if (Number.isFinite(producto.precioNeto) && IVA_PERMITIDOS.includes(producto.iva)) {
+      datos.push(`Neto ${money.format(producto.precioNeto)} · IVA ${String(producto.iva).replace(".", ",")}%`);
+    }
+    if (Number.isFinite(producto.precioLista1ConIva)) {
+      datos.push(`Gestión lista 1 ${money.format(producto.precioLista1ConIva)} IVA incluido${producto.codigoIva ? ` · CIVA ${producto.codigoIva}` : ""}`);
+    }
+    datos.push(textoStock(producto));
+    if (producto.deposito) datos.push(producto.deposito);
+    if (producto.fechaStock) datos.push(`Exportado ${producto.fechaStock}`);
+    detail.textContent = datos.join(" · ");
     info.append(name, detail);
     const actions = document.createElement("div");
     actions.className = "quote-catalog-item-actions";
@@ -286,9 +431,11 @@ function editarProducto(codigo) {
   $("quote-product-code").value = producto.codigo;
   $("quote-product-name").value = producto.descripcion;
   $("quote-product-unit").value = producto.unidad || "";
-  $("quote-product-price").value = String(producto.precioNeto);
-  $("quote-product-iva").value = String(producto.iva);
-  $("quote-catalog-status").textContent = "Editando producto. Guardá para aplicar los cambios al catálogo.";
+  $("quote-product-price").value = Number.isFinite(producto.precioNeto) ? String(producto.precioNeto) : "";
+  $("quote-product-iva").value = IVA_PERMITIDOS.includes(producto.iva) ? String(producto.iva) : "";
+  $("quote-catalog-status").textContent = Number.isFinite(producto.precioLista1ConIva)
+    ? "Si cargás un precio sin IVA, quedará como precio manual prioritario. Se conserva el precio de Gestión como referencia."
+    : "Editando producto. Guardá para aplicar los cambios al catálogo.";
   $("quote-product-name").focus();
 }
 
@@ -318,7 +465,8 @@ function guardarProducto(event) {
     $("quote-catalog-status").textContent = "Ese código ya pertenece a otro producto. Usá un código único.";
     return;
   }
-  const producto = { codigo, descripcion, unidad, precioNeto, iva };
+  const previo = catalogo.find((p) => normalizarCodigo(p.codigo) === normalizarCodigo(codigo));
+  const producto = { ...previo, codigo, descripcion, unidad, precioNeto, iva };
   if (editando) {
     const index = catalogo.findIndex((p) => normalizarCodigo(p.codigo) === normalizarCodigo(editando));
     if (index >= 0) catalogo[index] = producto;
@@ -404,28 +552,54 @@ function importarCsv(texto) {
   if (filas.length > 10001) throw new Error("El archivo supera el límite de 10.000 productos.");
   const headers = filas[0];
   const col = {
-    codigo: columna(headers, ["codigo", "sku", "code"]),
-    descripcion: columna(headers, ["descripcion", "producto", "nombre", "articulo", "name"]),
+    codigo: columna(headers, ["codigo", "carticulo", "sku", "code"]),
+    descripcion: columna(headers, ["descripcion", "articulolargo", "producto", "nombre", "articulo", "name"]),
+    alias: columna(headers, ["alias", "articulocorto"]),
     unidad: columna(headers, ["unidad", "unit", "unidadmedida"]),
     precio: columna(headers, ["preciosiniva", "preciounitariosiniva", "unitpricesinvat"]),
     iva: columna(headers, ["iva", "alicuota", "tasaiva", "taxrate"]),
+    precioGestion: columna(headers, ["preciolista1coniva", "preciogestionconiva", "puconiva1"]),
+    codigoIva: columna(headers, ["codigoiva", "civa"]),
+    stock: columna(headers, ["stock", "cantidad", "existencia"]),
+    estadoStock: columna(headers, ["estadostock", "estadoregistro"]),
+    deposito: columna(headers, ["deposito"]),
+    fechaStock: columna(headers, ["fechastock", "actualizado", "corte"]),
+    origen: columna(headers, ["origen"]),
   };
-  if (col.codigo < 0 || col.descripcion < 0 || col.precio < 0 || col.iva < 0) {
-    throw new Error("Faltan columnas requeridas. Usá el formato: codigo;descripcion;unidad;precio_sin_iva;iva");
+  if (col.codigo < 0 || col.descripcion < 0) {
+    throw new Error("Faltan columnas requeridas. Incluí al menos codigo y descripcion.");
   }
   let importados = 0;
   let omitidos = 0;
   for (const fila of filas.slice(1)) {
     const codigo = String(fila[col.codigo] ?? "").trim();
     const descripcion = String(fila[col.descripcion] ?? "").trim();
+    const alias = col.alias < 0 ? "" : String(fila[col.alias] ?? "").trim();
     const unidad = col.unidad < 0 ? "" : String(fila[col.unidad] ?? "").trim();
-    const precioNeto = numeroCsv(fila[col.precio]);
-    const iva = numeroCsv(fila[col.iva]);
-    if (!codigo || !descripcion || !Number.isFinite(precioNeto) || precioNeto < 0 || !IVA_PERMITIDOS.includes(iva)) {
+    const precioNeto = col.precio < 0 ? NaN : numeroCsv(fila[col.precio]);
+    const iva = col.iva < 0 ? NaN : numeroCsv(fila[col.iva]);
+    const precioLista1ConIva = col.precioGestion < 0 ? NaN : numeroCsv(fila[col.precioGestion]);
+    const codigoIva = col.codigoIva < 0 ? "" : String(fila[col.codigoIva] ?? "").trim();
+    const stock = col.stock < 0 ? NaN : numeroCsv(fila[col.stock]);
+    const estadoStock = col.estadoStock < 0 ? "" : String(fila[col.estadoStock] ?? "").trim();
+    const deposito = col.deposito < 0 ? "" : String(fila[col.deposito] ?? "").trim();
+    const fechaStock = col.fechaStock < 0 ? "" : String(fila[col.fechaStock] ?? "").trim();
+    const origen = col.origen < 0 ? "" : String(fila[col.origen] ?? "").trim();
+    const precioNetoValido = Number.isFinite(precioNeto) && precioNeto >= 0 && IVA_PERMITIDOS.includes(iva);
+    const precioGestionValido = Number.isFinite(precioLista1ConIva) && precioLista1ConIva >= 0;
+    const stockInformado = Number.isFinite(stock) || Boolean(estadoStock);
+    if (!codigo || !descripcion || (!precioNetoValido && !precioGestionValido && !stockInformado)) {
       omitidos++;
       continue;
     }
-    const producto = { codigo, descripcion, unidad, precioNeto, iva };
+    const producto = {
+      codigo, descripcion, alias, unidad,
+      precioNeto: precioNetoValido ? precioNeto : null,
+      iva: precioNetoValido ? iva : null,
+      precioLista1ConIva: precioGestionValido ? precioLista1ConIva : null,
+      codigoIva, stock: Number.isFinite(stock) ? stock : null,
+      estadoStock, deposito, fechaStock, origen,
+    };
     const index = catalogo.findIndex((p) => normalizarCodigo(p.codigo) === normalizarCodigo(codigo));
     if (index >= 0) catalogo[index] = producto;
     else catalogo.push(producto);
@@ -453,13 +627,20 @@ function descargarArchivo(nombre, contenido, tipo = "text/csv;charset=utf-8") {
 }
 
 function descargarPlantillaCsv() {
-  const contenido = "\uFEFFcodigo;descripcion;unidad;precio_sin_iva;iva\r\n";
+  const contenido = "\uFEFFcodigo;descripcion;alias;unidad;precio_sin_iva;iva;precio_lista1_con_iva;codigo_iva;stock;estado_stock;deposito;fecha_stock;origen\r\n";
   descargarArchivo("plantilla-catalogo-ferreteria.csv", contenido);
 }
 
 function exportarCatalogoCsv() {
-  const filas = [["codigo", "descripcion", "unidad", "precio_sin_iva", "iva"]];
-  for (const p of catalogo) filas.push([p.codigo, p.descripcion, p.unidad, Number(p.precioNeto).toFixed(2).replace(".", ","), String(p.iva).replace(".", ",")]);
+  const filas = [["codigo", "descripcion", "alias", "unidad", "precio_sin_iva", "iva", "precio_lista1_con_iva", "codigo_iva", "stock", "estado_stock", "deposito", "fecha_stock", "origen"]];
+  for (const p of catalogo) filas.push([
+    p.codigo, p.descripcion, p.alias, p.unidad,
+    Number.isFinite(p.precioNeto) ? p.precioNeto.toFixed(2).replace(".", ",") : "",
+    IVA_PERMITIDOS.includes(p.iva) ? String(p.iva).replace(".", ",") : "",
+    Number.isFinite(p.precioLista1ConIva) ? p.precioLista1ConIva.toFixed(2).replace(".", ",") : "",
+    p.codigoIva, Number.isFinite(p.stock) ? String(p.stock).replace(".", ",") : "",
+    p.estadoStock, p.deposito, p.fechaStock, p.origen,
+  ]);
   const contenido = "\uFEFF" + filas.map((fila) => fila.map(escaparCsv).join(";")).join("\r\n");
   descargarArchivo("catalogo-ferreteria-local.csv", contenido);
 }
@@ -483,6 +664,13 @@ function obtenerBorrador() {
         unidad: fields[3].value,
         precio: fields[4].value,
         iva: tr.querySelector("select").value,
+        stockTexto: tr.querySelector(".quote-stock-text")?.textContent || "No verificado",
+        stockFuente: tr.querySelector(".quote-stock-cell")?.dataset.source || "",
+        stockCantidad: tr.querySelector(".quote-stock-cell")?.dataset.stock === "" ? null : numeroOpcional(tr.querySelector(".quote-stock-cell")?.dataset.stock),
+        stockUnidad: tr.querySelector(".quote-stock-cell")?.dataset.unit || "",
+        stockFaltanteManual: tr.querySelector(".quote-stock-cell")?.dataset.manualShortage === "true",
+        sinStock: Boolean(tr.querySelector("input[aria-label='Marcar faltante o stock insuficiente']")?.checked),
+        entrega: tr.querySelector("input[aria-label='Reposición o llegada']")?.value || "",
       };
     }),
   };
@@ -536,6 +724,13 @@ function aplicarBorrador(borrador) {
       unidad: String(item.unidad || ""),
       precio: String(item.precio || ""),
       iva: String(item.iva ?? ""),
+      stockTexto: String(item.stockTexto || "No verificado"),
+      stockFuente: String(item.stockFuente || ""),
+      stockCantidad: numeroOpcional(item.stockCantidad),
+      stockUnidad: String(item.stockUnidad || item.unidad || ""),
+      stockFaltanteManual: Boolean(item.stockFaltanteManual),
+      sinStock: Boolean(item.sinStock),
+      entrega: String(item.entrega || ""),
     });
   }
   if (!$("quote-items").rows.length) crearFila();
@@ -638,6 +833,7 @@ export function iniciarPresupuestos() {
   $("presupuesto-papel").addEventListener("input", () => { recalcular(); guardarBorrador(); });
   $("presupuesto-papel").addEventListener("change", () => { recalcular(); guardarBorrador(); });
   $("quote-add-row").addEventListener("click", () => crearFila());
+  $("quote-catalog-search").addEventListener("input", actualizarCatalogo);
   $("quote-add-from-catalog").addEventListener("click", () => {
     const elegido = $("quote-catalog-search").value.trim();
     const producto = catalogo.find((p) => etiquetaProducto(p) === elegido);
@@ -706,24 +902,35 @@ export function crearPresupuestoDesdeIA(items = []) {
   for (const item of solicitados) {
     const nombre = item.producto_estandarizado.trim();
     const detalle = typeof item.medida_o_detalle === "string" ? item.medida_o_detalle.trim() : "";
+    const cantidad = Number(item.cantidad) > 0 ? Number(item.cantidad) : 1;
     const coincidencia = catalogoCoincidente(nombre, detalle);
     if (coincidencia) encontrados++;
+    const tieneNeto = coincidencia && Number.isFinite(coincidencia.precioNeto) && IVA_PERMITIDOS.includes(coincidencia.iva);
+    const tieneGestion = coincidencia && Number.isFinite(coincidencia.precioLista1ConIva);
+    const precio = tieneNeto ? String(coincidencia.precioNeto) : tieneGestion ? String(coincidencia.precioLista1ConIva) : "";
+    const iva = tieneNeto ? String(coincidencia.iva) : tieneGestion ? IVA_INCLUIDO_GESTION : "";
     crearFila({
       codigo: coincidencia?.codigo || "",
       descripcion: coincidencia?.descripcion || [nombre, detalle].filter(Boolean).join(" - "),
-      cantidad: Number(item.cantidad) > 0 ? Number(item.cantidad) : 1,
+      cantidad,
       unidad: coincidencia?.unidad || "",
-      precio: coincidencia ? String(coincidencia.precioNeto) : "",
-      iva: coincidencia ? String(coincidencia.iva) : "",
+      precio,
+      iva,
+      stockTexto: coincidencia ? textoStock(coincidencia, cantidad) : "No vinculado al catálogo",
+      stockFuente: fuenteStock(coincidencia),
+      stockCantidad: coincidencia?.stock ?? null,
+      stockUnidad: coincidencia?.unidad || "",
+      sinStock: Boolean(coincidencia && Number.isFinite(coincidencia.stock) && coincidencia.stock < cantidad),
+      entrega: coincidencia && Number.isFinite(coincidencia.stock) && coincidencia.stock < cantidad ? "A confirmar" : "",
     });
   }
   $("presupuestos").open = true;
   const pendientes = solicitados.length - encontrados;
-  $("quote-status").textContent = `Borrador creado desde voz/texto: ${solicitados.length} articulo(s). ${encontrados} coincidieron exactamente con el catalogo${pendientes ? `; completa precio e IVA en ${pendientes} pendiente(s)` : "; revisa precios y datos del cliente"}.${archivado ? " El borrador anterior quedo guardado en Presupuestos anteriores." : ""}`;
+  $("quote-status").textContent = `Borrador creado desde voz/texto: ${solicitados.length} articulo(s). ${encontrados} productos se vincularon a una coincidencia unica del catalogo${pendientes ? `; completa precio e IVA en ${pendientes} pendiente(s)` : "; revisa precios y datos del cliente"}.${archivado ? " El borrador anterior quedo guardado en Presupuestos anteriores." : ""}`;
   guardarBorrador();
   $("presupuestos").scrollIntoView({ behavior: "smooth", block: "start" });
-  const primeroIncompleto = Array.from($("quote-items").rows).find((fila) => !fila.querySelector("input[aria-label='Precio unitario sin IVA']").value);
-  if (primeroIncompleto) primeroIncompleto.querySelector("input[aria-label='Precio unitario sin IVA']").focus({ preventScroll: true });
+  const primeroIncompleto = Array.from($("quote-items").rows).find((fila) => !fila.querySelector("input[aria-label='Precio unitario']").value);
+  if (primeroIncompleto) primeroIncompleto.querySelector("input[aria-label='Precio unitario']").focus({ preventScroll: true });
   return true;
 }
 
@@ -733,17 +940,30 @@ export function agregarProductoAlPresupuesto(nombre, cantidad = 1, detalle = "")
   const descripcion = coincidencia?.descripcion || [nombre, detalle].filter(Boolean).join(" - ").trim();
   if (!descripcion) return;
   $("presupuestos").open = true;
+  const tieneNeto = coincidencia && Number.isFinite(coincidencia.precioNeto) && IVA_PERMITIDOS.includes(coincidencia.iva);
+  const tieneGestion = coincidencia && Number.isFinite(coincidencia.precioLista1ConIva);
+  const precio = tieneNeto ? String(coincidencia.precioNeto) : tieneGestion ? String(coincidencia.precioLista1ConIva) : "";
+  const iva = tieneNeto ? String(coincidencia.iva) : tieneGestion ? IVA_INCLUIDO_GESTION : "";
+  const cantidadFinal = Number(cantidad) > 0 ? Number(cantidad) : 1;
   const fila = crearFila({
     codigo: coincidencia?.codigo || "",
     descripcion,
-    cantidad: Number(cantidad) > 0 ? Number(cantidad) : 1,
+    cantidad: cantidadFinal,
     unidad: coincidencia?.unidad || "",
-    precio: coincidencia ? String(coincidencia.precioNeto) : "",
-    iva: coincidencia ? String(coincidencia.iva) : "",
+    precio,
+    iva,
+    stockTexto: coincidencia ? textoStock(coincidencia, cantidadFinal) : "No vinculado al catálogo",
+    stockFuente: fuenteStock(coincidencia),
+    stockCantidad: coincidencia?.stock ?? null,
+    stockUnidad: coincidencia?.unidad || "",
+    sinStock: Boolean(coincidencia && Number.isFinite(coincidencia.stock) && coincidencia.stock < cantidadFinal),
+    entrega: coincidencia && Number.isFinite(coincidencia.stock) && coincidencia.stock < cantidadFinal ? "A confirmar" : "",
   });
-  $("quote-status").textContent = coincidencia
-    ? "Coincidencia exacta del catálogo local agregada. Confirmá el producto y que el precio e IVA sigan vigentes."
-    : "Artículo agregado desde voz. Completá el precio y confirmá el IVA antes de imprimir.";
+  $("quote-status").textContent = !coincidencia
+    ? "Artículo agregado desde voz. Completá precio e IVA y marcá si falta stock."
+    : tieneGestion && !tieneNeto
+      ? "Producto vinculado a Gestión. El precio de lista 1 incluye IVA; revisá el stock exportado y ajustá el precio si hace falta."
+      : "Producto vinculado al catálogo local. Confirmá descripción, precio, IVA y disponibilidad.";
   $("presupuestos").scrollIntoView({ behavior: "smooth", block: "start" });
   fila.querySelector("input[aria-label='Artículo o descripción']").focus({ preventScroll: true });
 }
