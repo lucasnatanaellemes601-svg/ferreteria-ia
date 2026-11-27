@@ -2,6 +2,7 @@ const $ = (id) => document.getElementById(id);
 const money = new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS" });
 const cantidadFormato = new Intl.NumberFormat("es-AR", { maximumFractionDigits: 2 });
 const LS_CATALOGO = "ferreteria_catalogo_local_v1";
+const LS_CATALOGO_META = "ferreteria_catalogo_meta_v1";
 const LS_BORRADOR = "ferreteria_presupuesto_borrador_v1";
 const LS_ARCHIVO = "ferreteria_presupuestos_anteriores_v1";
 const IVA_PERMITIDOS = [0, 2.5, 5, 10.5, 21, 27];
@@ -26,6 +27,42 @@ function guardarLocal(clave, valor) {
   } catch {
     return false;
   }
+}
+
+function actualizarEstadoCatalogo() {
+  const estado = $("quote-catalog-file-state");
+  const indicador = $("quote-catalog-file-short");
+  const botonEliminar = $("quote-catalog-clear");
+  if (!estado) return;
+  const meta = leerLocal(LS_CATALOGO_META, null);
+  const tieneArchivo = Boolean(meta && typeof meta.nombreArchivo === "string" && meta.nombreArchivo);
+  if (botonEliminar) botonEliminar.hidden = catalogo.length === 0;
+  if (indicador) indicador.textContent = catalogo.length ? (tieneArchivo ? "archivo cargado" : "catálogo guardado") : "sin archivo";
+  if (!catalogo.length) {
+    estado.textContent = "No hay un catálogo cargado en esta computadora.";
+    return;
+  }
+  if (tieneArchivo) {
+    const fecha = new Date(meta.importadoEn);
+    const fechaTexto = Number.isNaN(fecha.getTime()) ? "" : ` · importado ${fecha.toLocaleString("es-AR")}`;
+    estado.textContent = `Catálogo cargado desde ${meta.nombreArchivo} · ${catalogo.length} productos${fechaTexto}. Los productos quedan guardados en esta computadora.`;
+  } else {
+    estado.textContent = `Hay ${catalogo.length} productos guardados en esta computadora. El nombre del archivo de origen no está registrado.`;
+  }
+}
+
+function eliminarCatalogoCompleto() {
+  if (!catalogo.length) return;
+  const confirmado = window.confirm(`¿Eliminar los ${catalogo.length} productos del catálogo de esta computadora? Los presupuestos ya guardados no se borran.`);
+  if (!confirmado) return;
+  if (!guardarLocal(LS_CATALOGO, [])) {
+    $("quote-catalog-status").textContent = "No se pudo eliminar el catálogo guardado en este navegador.";
+    return;
+  }
+  catalogo = [];
+  try { localStorage.removeItem(LS_CATALOGO_META); } catch {}
+  actualizarCatalogo();
+  $("quote-catalog-status").textContent = "Catálogo eliminado de esta computadora. Los borradores y presupuestos guardados siguen intactos.";
 }
 
 function numeroOpcional(valor) {
@@ -432,6 +469,7 @@ function actualizarCatalogo() {
   $("quote-catalog-hint").textContent = catalogo.length
     ? `Hay ${catalogo.length} productos en el catálogo de esta computadora. Revisá precios antes de cotizar.`
     : "Todavía no cargaste productos. Podés ingresarlos a mano o importar un CSV.";
+  actualizarEstadoCatalogo();
   renderizarProductosCatalogo();
 }
 
@@ -612,7 +650,7 @@ function columna(headers, alias) {
   return normalizados.findIndex((h) => alias.includes(h));
 }
 
-function importarCsv(texto) {
+function importarCsv(texto, { reemplazar = false, nombreArchivo = "" } = {}) {
   const filas = parsearCsv(texto);
   if (filas.length < 2) throw new Error("El CSV está vacío o solo contiene encabezados.");
   if (filas.length > 10001) throw new Error("El archivo supera el límite de 10.000 productos.");
@@ -637,6 +675,7 @@ function importarCsv(texto) {
   }
   let importados = 0;
   let omitidos = 0;
+  const catalogoTrabajo = reemplazar ? [] : catalogo.slice();
   for (const fila of filas.slice(1)) {
     const codigo = String(fila[col.codigo] ?? "").trim();
     const descripcion = String(fila[col.descripcion] ?? "").trim();
@@ -666,15 +705,23 @@ function importarCsv(texto) {
       codigoIva, stock: Number.isFinite(stock) ? stock : null,
       estadoStock, deposito, fechaStock, origen,
     };
-    const index = catalogo.findIndex((p) => normalizarCodigo(p.codigo) === normalizarCodigo(codigo));
-    if (index >= 0) catalogo[index] = producto;
-    else catalogo.push(producto);
+    const index = catalogoTrabajo.findIndex((p) => normalizarCodigo(p.codigo) === normalizarCodigo(codigo));
+    if (index >= 0) catalogoTrabajo[index] = producto;
+    else catalogoTrabajo.push(producto);
     importados++;
   }
-  catalogo.sort((a, b) => a.codigo.localeCompare(b.codigo, "es"));
-  if (!guardarLocal(LS_CATALOGO, catalogo)) throw new Error("No se pudo guardar. El navegador puede estar sin espacio disponible.");
+  if (reemplazar && importados === 0) throw new Error("No encontré productos válidos en el archivo; conservé el catálogo que ya estaba cargado.");
+  catalogoTrabajo.sort((a, b) => a.codigo.localeCompare(b.codigo, "es"));
+  if (!guardarLocal(LS_CATALOGO, catalogoTrabajo)) throw new Error("No se pudo guardar. El navegador puede estar sin espacio disponible.");
+  catalogo = catalogoTrabajo;
+  const metadataGuardada = nombreArchivo
+    ? guardarLocal(LS_CATALOGO_META, { nombreArchivo, importadoEn: new Date().toISOString(), productosImportados: importados })
+    : true;
+  if (nombreArchivo && !metadataGuardada) {
+    try { localStorage.removeItem(LS_CATALOGO_META); } catch {}
+  }
   actualizarCatalogo();
-  return { importados, omitidos };
+  return { importados, omitidos, metadataGuardada };
 }
 
 function escaparCsv(valor) {
@@ -938,14 +985,19 @@ export function iniciarPresupuestos() {
   $("quote-catalog-filter").addEventListener("input", renderizarProductosCatalogo);
   $("quote-catalog-template").addEventListener("click", descargarPlantillaCsv);
   $("quote-catalog-export").addEventListener("click", exportarCatalogoCsv);
+  $("quote-catalog-clear").addEventListener("click", eliminarCatalogoCompleto);
   $("quote-catalog-file").addEventListener("change", async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
     try {
       if (file.size > 5 * 1024 * 1024) throw new Error("El CSV supera el límite de 5 MB.");
-      const result = importarCsv(await file.text());
+      if (catalogo.length && !window.confirm(`Ya hay ${catalogo.length} productos cargados. ¿Reemplazarlos por los del archivo seleccionado? Se quitarán también los productos manuales que no estén en ese archivo; los presupuestos guardados se conservan.`)) {
+        $("quote-catalog-status").textContent = "No se reemplazó el catálogo actual.";
+        return;
+      }
+      const result = importarCsv(await file.text(), { reemplazar: true, nombreArchivo: file.name });
       vincularPresupuestoConCatalogo();
-      $("quote-catalog-status").textContent = `${result.importados} productos importados o actualizados${result.omitidos ? `; ${result.omitidos} filas omitidas por datos inválidos` : ""}.`;
+      $("quote-catalog-status").textContent = `Catálogo reemplazado: ${result.importados} productos${result.omitidos ? `; ${result.omitidos} filas omitidas por datos inválidos` : ""}.${result.metadataGuardada ? " Nombre del archivo registrado; productos guardados en esta computadora." : " Los productos quedaron guardados, pero no pude registrar el nombre del archivo."}`;
     } catch (error) {
       $("quote-catalog-status").textContent = error?.message || "No se pudo importar el CSV.";
     } finally {

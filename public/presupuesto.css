@@ -74,6 +74,8 @@
 .quote-product-form-actions button { padding: 7px 9px; font-size: .76rem; }
 .quote-catalog-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; margin-top: 12px; }
 .quote-catalog-tools button, .quote-import-label { padding: 7px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--card); font-size: .76rem; }
+.quote-catalog-file-state { flex-basis: 100%; margin: 0; color: var(--muted); font-size: .74rem; }
+.quote-catalog-danger { color: var(--bad); }
 .quote-import-label { display: grid; gap: 5px; color: var(--muted); font-weight: 700; }
 .quote-import-label input { max-width: 230px; font: .74rem var(--font, system-ui); }
 .quote-catalog-filter { margin-top: 12px; }
