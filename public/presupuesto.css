@@ -136,11 +136,8 @@
   body.print-quote .quote-table th { background: #242426 !important; color: #fff !important; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
   body.print-quote .quote-table th, body.print-quote .quote-table td { padding: 5px 3px; }
   body.print-quote .quote-table td input, body.print-quote .quote-table td select { font-size: 8pt; padding: 2px 1px; }
-  body.print-quote .quote-stock-check input { width: 11px; height: 11px; border: 1px solid #111; padding: 0; }
-  body.print-quote .quote-stock-cell { min-width: 0; font-size: 7pt; }
-  body.print-quote .quote-stock-check { font-size: 7pt; }
-  body.print-quote .quote-arrival { margin-top: 3px; padding: 0; font-size: 7pt !important; }
-  body.print-quote .quote-arrival:placeholder-shown { display: none; }
+  body.print-quote .quote-table th:nth-child(8), body.print-quote .quote-table td:nth-child(8),
+  body.print-quote #quote-stock-note { display: none !important; }
   body.print-quote .quote-grand { background: #0b0b0d !important; color: #fff !important; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
   body.print-quote .quote-conditions { min-height: 55px; }
   body.print-quote .quote-conditions textarea { min-height: 32px; resize: none; }
