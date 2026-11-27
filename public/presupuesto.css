@@ -137,7 +137,7 @@
   body.print-quote .quote-table th, body.print-quote .quote-table td { padding: 5px 3px; }
   body.print-quote .quote-table td input, body.print-quote .quote-table td select { font-size: 8pt; padding: 2px 1px; }
   body.print-quote .quote-table th:nth-child(8), body.print-quote .quote-table td:nth-child(8),
-  body.print-quote #quote-stock-note { display: none !important; }
+  body.print-quote #quote-stock-note, body.print-quote #quote-tax-included-note { display: none !important; }
   body.print-quote .quote-grand { background: #0b0b0d !important; color: #fff !important; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
   body.print-quote .quote-conditions { min-height: 55px; }
   body.print-quote .quote-conditions textarea { min-height: 32px; resize: none; }

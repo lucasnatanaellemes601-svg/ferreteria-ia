@@ -106,7 +106,7 @@ function crearSelectIva(valor = "") {
   select.append(placeholder);
   const incluido = document.createElement("option");
   incluido.value = IVA_INCLUIDO_GESTION;
-  incluido.textContent = "Incluido (Gestión)";
+  incluido.textContent = "Incluido";
   select.append(incluido);
   for (const tasa of IVA_PERMITIDOS) {
     const option = document.createElement("option");
