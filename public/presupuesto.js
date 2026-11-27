@@ -1,8 +1,11 @@
+import { supabase } from "./supabase.js";
+
 const $ = (id) => document.getElementById(id);
 const money = new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS" });
 const cantidadFormato = new Intl.NumberFormat("es-AR", { maximumFractionDigits: 2 });
 const LS_CATALOGO = "ferreteria_catalogo_local_v1";
 const LS_CATALOGO_META = "ferreteria_catalogo_meta_v1";
+const LS_CATALOGO_NUBE = "ferreteria_catalogo_compartido_v1";
 const LS_BORRADOR = "ferreteria_presupuesto_borrador_v1";
 const LS_ARCHIVO = "ferreteria_presupuestos_anteriores_v1";
 const IVA_PERMITIDOS = [0, 2.5, 5, 10.5, 21, 27];
@@ -10,6 +13,43 @@ const IVA_INCLUIDO_GESTION = "INCLUIDO_GESTION";
 
 let catalogo = cargarCatalogo();
 let presupuestoListo = false;
+let modoRemoto = false;
+let catalogoAdmin = true;
+let catalogoEnNube = false;
+let perfilPresupuesto = null;
+let importacionNube = null;
+let presupuestosNube = [];
+let timerGuardadoNube = null;
+let colaGuardadoNube = Promise.resolve();
+let versionGuardadoNube = 0;
+
+function nuevoUuid() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  const bytes = new Uint8Array(16);
+  globalThis.crypto?.getRandomValues?.(bytes);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function productoDesdeNube(producto) {
+  return {
+    codigo: String(producto.codigo || ""),
+    descripcion: String(producto.nombre || ""),
+    alias: String(producto.alias || ""),
+    unidad: String(producto.unidad || ""),
+    precioNeto: numeroOpcional(producto.precio_sin_iva),
+    iva: numeroOpcional(producto.iva_alicuota),
+    precioLista1ConIva: numeroOpcional(producto.precio_lista1_con_iva),
+    codigoIva: String(producto.codigo_iva || ""),
+    stock: numeroOpcional(producto.stock_gestion),
+    estadoStock: String(producto.estado_stock_gestion || ""),
+    deposito: String(producto.deposito_gestion || ""),
+    fechaStock: String(producto.corte_stock_gestion || ""),
+    origen: String(producto.origen_datos || ""),
+  };
+}
 
 function leerLocal(clave, alternativo) {
   try {
@@ -29,6 +69,47 @@ function guardarLocal(clave, valor) {
   }
 }
 
+async function hidratarDatosNube() {
+  if (!modoRemoto) return false;
+  try {
+    const datos = await supabase.loadCatalog();
+    importacionNube = datos.import;
+    catalogoEnNube = datos.products.length > 0;
+    if (catalogoEnNube) {
+      catalogo = datos.products.map(productoDesdeNube);
+      guardarLocal(LS_CATALOGO, catalogo);
+      guardarLocal(LS_CATALOGO_NUBE, true);
+      if (importacionNube) {
+        guardarLocal(LS_CATALOGO_META, {
+          nombreArchivo: importacionNube.nombre_archivo,
+          importadoEn: importacionNube.importado_en,
+          productosImportados: importacionNube.productos_importados,
+        });
+      }
+    } else if (leerLocal(LS_CATALOGO_NUBE, false)) {
+      catalogo = [];
+      guardarLocal(LS_CATALOGO, catalogo);
+      try { localStorage.removeItem(LS_CATALOGO_META); } catch {}
+      try { localStorage.removeItem(LS_CATALOGO_NUBE); } catch {}
+    }
+    const filas = await supabase.loadQuotes();
+    presupuestosNube = (filas || []).map((fila) => {
+      const borrador = fila.contenido_borrador && typeof fila.contenido_borrador === "object"
+        ? { ...fila.contenido_borrador }
+        : {};
+      borrador.id = fila.id;
+      borrador.numero = borrador.numero || fila.numero;
+      borrador.cliente = borrador.cliente || fila.cliente || "";
+      return { id: fila.id, fecha: fila.updated_at || fila.created_at, borrador };
+    });
+    return true;
+  } catch (error) {
+    const estado = $("quote-catalog-status");
+    if (estado) estado.textContent = `No pude cargar los datos compartidos: ${error?.message || "error de conexión"}`;
+    return false;
+  }
+}
+
 function actualizarEstadoCatalogo() {
   const estado = $("quote-catalog-file-state");
   const indicador = $("quote-catalog-file-short");
@@ -36,10 +117,28 @@ function actualizarEstadoCatalogo() {
   if (!estado) return;
   const meta = leerLocal(LS_CATALOGO_META, null);
   const tieneArchivo = Boolean(meta && typeof meta.nombreArchivo === "string" && meta.nombreArchivo);
-  if (botonEliminar) botonEliminar.hidden = catalogo.length === 0;
-  if (indicador) indicador.textContent = catalogo.length ? (tieneArchivo ? "archivo cargado" : "catálogo guardado") : "sin archivo";
+  const compartir = $("quote-catalog-share");
+  if (botonEliminar) botonEliminar.hidden = !catalogoAdmin || catalogo.length === 0;
+  if (compartir) compartir.hidden = !modoRemoto || !catalogoAdmin || catalogoEnNube || catalogo.length === 0;
+  if (indicador) indicador.textContent = catalogo.length
+    ? (modoRemoto && catalogoEnNube ? "compartido" : tieneArchivo ? "archivo cargado" : "catálogo guardado")
+    : "sin archivo";
   if (!catalogo.length) {
-    estado.textContent = "No hay un catálogo cargado en esta computadora.";
+    estado.textContent = modoRemoto ? "Todavía no hay un catálogo compartido." : "No hay un catálogo cargado en esta computadora.";
+    return;
+  }
+  if (modoRemoto && catalogoEnNube && importacionNube) {
+    const fecha = new Date(importacionNube.importado_en);
+    const fechaTexto = Number.isNaN(fecha.getTime()) ? "" : ` · importado ${fecha.toLocaleString("es-AR")}`;
+    estado.textContent = `Catálogo compartido: ${importacionNube.nombre_archivo} · ${catalogo.length} productos${fechaTexto}.`;
+    return;
+  }
+  if (modoRemoto && catalogoEnNube) {
+    estado.textContent = `Catálogo compartido: ${catalogo.length} productos.`;
+    return;
+  }
+  if (modoRemoto && !catalogoEnNube) {
+    estado.textContent = `Hay ${catalogo.length} productos guardados solo en esta computadora. Compartilos para que los vea el equipo.`;
     return;
   }
   if (tieneArchivo) {
@@ -51,10 +150,22 @@ function actualizarEstadoCatalogo() {
   }
 }
 
-function eliminarCatalogoCompleto() {
+async function eliminarCatalogoCompleto() {
   if (!catalogo.length) return;
-  const confirmado = window.confirm(`¿Eliminar los ${catalogo.length} productos del catálogo de esta computadora? Los presupuestos ya guardados no se borran.`);
+  const alcance = modoRemoto ? "del catálogo compartido para todo el equipo" : "del catálogo de esta computadora";
+  const confirmado = window.confirm(`¿Eliminar los ${catalogo.length} productos ${alcance}? Los presupuestos ya guardados no se borran.`);
   if (!confirmado) return;
+  if (modoRemoto) {
+    try {
+      await supabase.clearCatalog();
+      catalogoEnNube = false;
+      importacionNube = null;
+      try { localStorage.removeItem(LS_CATALOGO_NUBE); } catch {}
+    } catch (error) {
+      $("quote-catalog-status").textContent = `No pude vaciar el catálogo compartido: ${error?.message || "error de conexión"}`;
+      return;
+    }
+  }
   if (!guardarLocal(LS_CATALOGO, [])) {
     $("quote-catalog-status").textContent = "No se pudo eliminar el catálogo guardado en este navegador.";
     return;
@@ -62,7 +173,9 @@ function eliminarCatalogoCompleto() {
   catalogo = [];
   try { localStorage.removeItem(LS_CATALOGO_META); } catch {}
   actualizarCatalogo();
-  $("quote-catalog-status").textContent = "Catálogo eliminado de esta computadora. Los borradores y presupuestos guardados siguen intactos.";
+  $("quote-catalog-status").textContent = modoRemoto
+    ? "Catálogo compartido vaciado para todo el equipo. Los presupuestos guardados siguen intactos."
+    : "Catálogo eliminado de esta computadora. Los borradores y presupuestos guardados siguen intactos.";
 }
 
 function numeroOpcional(valor) {
@@ -288,9 +401,13 @@ function fechaDeHoyMasDias(dias) {
 }
 
 function inicializarCampos() {
+  $("quote-id").value = nuevoUuid();
   $("quote-date").value = fechaLocal();
   $("quote-valid-until").value = fechaDeHoyMasDias(7);
   $("quote-number").value = nuevaReferencia();
+  if (perfilPresupuesto?.nombre || perfilPresupuesto?.email) {
+    $("quote-seller").value = perfilPresupuesto.nombre || perfilPresupuesto.email;
+  }
 }
 
 function normalizarClave(valor) {
@@ -467,8 +584,16 @@ function actualizarCatalogo() {
   }
   $("quote-catalog-count").textContent = `${catalogo.length} ${catalogo.length === 1 ? "producto" : "productos"}`;
   $("quote-catalog-hint").textContent = catalogo.length
-    ? `Hay ${catalogo.length} productos en el catálogo de esta computadora. Revisá precios antes de cotizar.`
-    : "Todavía no cargaste productos. Podés ingresarlos a mano o importar un CSV.";
+    ? modoRemoto && catalogoEnNube
+      ? `Hay ${catalogo.length} productos en el catálogo compartido. Revisá precios antes de cotizar.`
+      : `Hay ${catalogo.length} productos ${modoRemoto ? "guardados en esta computadora" : "en el catálogo de esta computadora"}. Revisá precios antes de cotizar.`
+    : modoRemoto
+      ? "Todavía no hay catálogo compartido. El administrador puede importarlo o compartir el catálogo de esta computadora."
+      : "Todavía no cargaste productos. Podés ingresarlos a mano o importar un CSV.";
+  const manager = $("quote-catalog-manager");
+  if (manager?.querySelector("summary")) {
+    manager.querySelector("summary").firstChild.textContent = modoRemoto ? "Administrar catálogo compartido (" : "Administrar catálogo (";
+  }
   actualizarEstadoCatalogo();
   renderizarProductosCatalogo();
 }
@@ -501,18 +626,22 @@ function renderizarProductosCatalogo() {
     if (producto.fechaStock) datos.push(`Exportado ${producto.fechaStock}`);
     detail.textContent = datos.join(" · ");
     info.append(name, detail);
-    const actions = document.createElement("div");
-    actions.className = "quote-catalog-item-actions";
-    const edit = document.createElement("button");
-    edit.type = "button";
-    edit.textContent = "Editar";
-    edit.addEventListener("click", () => editarProducto(producto.codigo));
-    const remove = document.createElement("button");
-    remove.type = "button";
-    remove.textContent = "Eliminar";
-    remove.addEventListener("click", () => eliminarProducto(producto.codigo));
-    actions.append(edit, remove);
-    item.append(info, actions);
+    if (catalogoAdmin) {
+      const actions = document.createElement("div");
+      actions.className = "quote-catalog-item-actions";
+      const edit = document.createElement("button");
+      edit.type = "button";
+      edit.textContent = "Editar";
+      edit.addEventListener("click", () => editarProducto(producto.codigo));
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.textContent = "Eliminar";
+      remove.addEventListener("click", () => eliminarProducto(producto.codigo));
+      actions.append(edit, remove);
+      item.append(info, actions);
+    } else {
+      item.append(info);
+    }
     destino.append(item);
   }
   if (!productos.length) {
@@ -543,17 +672,31 @@ function editarProducto(codigo) {
   $("quote-product-name").focus();
 }
 
-function eliminarProducto(codigo) {
+async function eliminarProducto(codigo) {
   const producto = catalogo.find((p) => normalizarCodigo(p.codigo) === normalizarCodigo(codigo));
-  if (!producto || !window.confirm(`¿Eliminar ${producto.descripcion} del catálogo local?`)) return;
+  const alcance = modoRemoto ? "del catálogo compartido para todo el equipo" : "del catálogo local";
+  if (!producto || !window.confirm(`¿Eliminar ${producto.descripcion} ${alcance}?`)) return;
+  if (modoRemoto) {
+    try { await supabase.deleteProduct(codigo); }
+    catch (error) {
+      $("quote-catalog-status").textContent = `No pude eliminar el producto compartido: ${error?.message || "error de conexión"}`;
+      return;
+    }
+  }
   catalogo = catalogo.filter((p) => normalizarCodigo(p.codigo) !== normalizarCodigo(codigo));
   const guardado = guardarLocal(LS_CATALOGO, catalogo);
   actualizarCatalogo();
-  $("quote-catalog-status").textContent = guardado ? "Producto eliminado del catálogo." : "No se pudo guardar el cambio en este navegador.";
+  $("quote-catalog-status").textContent = guardado
+    ? modoRemoto ? "Producto eliminado del catálogo compartido." : "Producto eliminado del catálogo."
+    : "No se pudo guardar el cambio en este navegador.";
 }
 
-function guardarProducto(event) {
+async function guardarProducto(event) {
   event.preventDefault();
+  if (!catalogoAdmin) {
+    $("quote-catalog-status").textContent = "Solo el administrador puede modificar el catálogo compartido.";
+    return;
+  }
   const codigo = $("quote-product-code").value.trim();
   const descripcion = $("quote-product-name").value.trim();
   const unidad = $("quote-product-unit").value.trim();
@@ -571,23 +714,47 @@ function guardarProducto(event) {
   }
   const previo = catalogo.find((p) => normalizarCodigo(p.codigo) === normalizarCodigo(codigo));
   const producto = { ...previo, codigo, descripcion, unidad, precioNeto, iva };
+  let catalogoActualizado = catalogo.slice();
   if (editando) {
-    const index = catalogo.findIndex((p) => normalizarCodigo(p.codigo) === normalizarCodigo(editando));
-    if (index >= 0) catalogo[index] = producto;
-    else catalogo.push(producto);
+    const index = catalogoActualizado.findIndex((p) => normalizarCodigo(p.codigo) === normalizarCodigo(editando));
+    if (index >= 0) catalogoActualizado[index] = producto;
+    else catalogoActualizado.push(producto);
   } else if (codigoDuplicado) {
-    const index = catalogo.findIndex((p) => normalizarCodigo(p.codigo) === normalizarCodigo(codigo));
-    catalogo[index] = producto;
+    const index = catalogoActualizado.findIndex((p) => normalizarCodigo(p.codigo) === normalizarCodigo(codigo));
+    catalogoActualizado[index] = producto;
   } else {
-    catalogo.push(producto);
+    catalogoActualizado.push(producto);
   }
-  catalogo.sort((a, b) => a.codigo.localeCompare(b.codigo, "es"));
+  catalogoActualizado.sort((a, b) => a.codigo.localeCompare(b.codigo, "es"));
+  if (modoRemoto) {
+    try {
+      if (!catalogoEnNube && catalogo.length) {
+        const meta = leerLocal(LS_CATALOGO_META, {});
+        const primerProducto = catalogoActualizado.find((p) => p.deposito || p.fechaStock || p.origen) || {};
+        await supabase.replaceCatalog(catalogoActualizado, {
+          nombreArchivo: meta.nombreArchivo || "catalogo-guardado.csv",
+          origen: primerProducto.origen || "Catálogo local",
+          deposito: primerProducto.deposito || "",
+          corteFuente: primerProducto.fechaStock || "",
+        });
+      } else {
+        await supabase.saveProduct(producto);
+        if (editando && editando !== codigo) await supabase.deleteProduct(editando);
+      }
+      catalogoEnNube = true;
+      guardarLocal(LS_CATALOGO_NUBE, true);
+    } catch (error) {
+      $("quote-catalog-status").textContent = `No pude guardar el producto compartido: ${error?.message || "error de conexión"}`;
+      return;
+    }
+  }
+  catalogo = catalogoActualizado;
   const guardado = guardarLocal(LS_CATALOGO, catalogo);
   actualizarCatalogo();
   $("quote-product-form").reset();
   $("quote-product-id").value = "";
   $("quote-catalog-status").textContent = guardado
-    ? "Producto guardado en este navegador."
+    ? modoRemoto ? "Producto guardado en el catálogo compartido." : "Producto guardado en este navegador."
     : "No se pudo guardar: revisá el almacenamiento del navegador.";
 }
 
@@ -759,7 +926,36 @@ function exportarCatalogoCsv() {
 }
 
 function obtenerBorrador() {
+  const items = Array.from($("quote-items").rows).map((tr) => {
+    const fields = tr.querySelectorAll("input");
+    return {
+      codigo: fields[0].value,
+      descripcion: fields[1].value,
+      cantidad: fields[2].value,
+      unidad: fields[3].value,
+      precio: fields[4].value,
+      iva: tr.querySelector("select").value,
+      stockTexto: tr.querySelector(".quote-stock-text")?.textContent || "No verificado",
+      stockFuente: tr.querySelector(".quote-stock-cell")?.dataset.source || "",
+      stockCantidad: tr.querySelector(".quote-stock-cell")?.dataset.stock === "" ? null : numeroOpcional(tr.querySelector(".quote-stock-cell")?.dataset.stock),
+      stockUnidad: tr.querySelector(".quote-stock-cell")?.dataset.unit || "",
+      stockFaltanteManual: tr.querySelector(".quote-stock-cell")?.dataset.manualShortage === "true",
+      sinStock: Boolean(tr.querySelector("input[aria-label='Marcar faltante o stock insuficiente']")?.checked),
+      entrega: tr.querySelector("input[aria-label='Reposición o llegada']")?.value || "",
+    };
+  });
+  const total = items.reduce((suma, item) => {
+    const cantidad = Number(item.cantidad);
+    const precio = Number(item.precio);
+    if (!Number.isFinite(cantidad) || cantidad <= 0 || !Number.isFinite(precio) || precio < 0) return suma;
+    const base = cantidad * precio;
+    const impuesto = item.iva && item.iva !== IVA_INCLUIDO_GESTION
+      ? base * Number(item.iva) / 100
+      : 0;
+    return suma + base + impuesto;
+  }, 0);
   const borrador = {
+    id: $("quote-id").value || nuevoUuid(),
     numero: $("quote-number").value,
     cliente: $("quote-client").value,
     cuit: $("quote-tax-id").value,
@@ -768,26 +964,34 @@ function obtenerBorrador() {
     fecha: $("quote-date").value,
     validoHasta: $("quote-valid-until").value,
     observaciones: $("quote-notes").value,
-    items: Array.from($("quote-items").rows).map((tr) => {
-      const fields = tr.querySelectorAll("input");
-      return {
-        codigo: fields[0].value,
-        descripcion: fields[1].value,
-        cantidad: fields[2].value,
-        unidad: fields[3].value,
-        precio: fields[4].value,
-        iva: tr.querySelector("select").value,
-        stockTexto: tr.querySelector(".quote-stock-text")?.textContent || "No verificado",
-        stockFuente: tr.querySelector(".quote-stock-cell")?.dataset.source || "",
-        stockCantidad: tr.querySelector(".quote-stock-cell")?.dataset.stock === "" ? null : numeroOpcional(tr.querySelector(".quote-stock-cell")?.dataset.stock),
-        stockUnidad: tr.querySelector(".quote-stock-cell")?.dataset.unit || "",
-        stockFaltanteManual: tr.querySelector(".quote-stock-cell")?.dataset.manualShortage === "true",
-        sinStock: Boolean(tr.querySelector("input[aria-label='Marcar faltante o stock insuficiente']")?.checked),
-        entrega: tr.querySelector("input[aria-label='Reposición o llegada']")?.value || "",
-      };
-    }),
+    total: Math.round((total + Number.EPSILON) * 100) / 100,
+    items,
   };
   return borrador;
+}
+
+function guardarBorradorEnNube(borrador, inmediato = false) {
+  if (!modoRemoto || !borradorTieneContenido(borrador)) return;
+  const snapshot = JSON.parse(JSON.stringify(borrador));
+  clearTimeout(timerGuardadoNube);
+  const guardar = () => {
+    colaGuardadoNube = colaGuardadoNube
+      .catch(() => {})
+      .then(() => supabase.saveQuote(snapshot))
+      .then((id) => {
+        const guardado = { id: String(id || snapshot.id), fecha: new Date().toISOString(), borrador: snapshot };
+        const index = presupuestosNube.findIndex((entrada) => entrada.id === guardado.id);
+        if (index >= 0) presupuestosNube[index] = guardado;
+        else presupuestosNube.unshift(guardado);
+        renderizarArchivados();
+      })
+      .catch((error) => {
+        const estado = $("quote-status");
+        if (estado) estado.textContent = `Borrador guardado en este equipo, pero no se sincronizó: ${error?.message || "error de conexión"}`;
+      });
+  };
+  if (inmediato) guardar();
+  else timerGuardadoNube = setTimeout(guardar, 900);
 }
 
 function guardarBorrador() {
@@ -796,6 +1000,7 @@ function guardarBorrador() {
   if (!guardarLocal(LS_BORRADOR, borrador)) {
     $("quote-status").textContent = "No se pudo guardar el borrador en este navegador. Imprimilo antes de cerrar.";
   }
+  guardarBorradorEnNube(borrador);
 }
 
 function borradorTieneContenido(borrador) {
@@ -807,6 +1012,19 @@ function borradorTieneContenido(borrador) {
 
 function archivarBorrador(borrador) {
   if (!borradorTieneContenido(borrador)) return false;
+  if (modoRemoto) {
+    const guardados = leerLocal(LS_ARCHIVO, []);
+    const lista = Array.isArray(guardados) ? guardados : [];
+    const copia = {
+      id: globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      fecha: new Date().toISOString(),
+      borrador,
+    };
+    if (!guardarLocal(LS_ARCHIVO, [copia, ...lista].slice(0, 20))) return false;
+    guardarBorradorEnNube(borrador, true);
+    renderizarArchivados();
+    return true;
+  }
   const guardados = leerLocal(LS_ARCHIVO, []);
   const lista = Array.isArray(guardados) ? guardados : [];
   const id = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -818,6 +1036,7 @@ function archivarBorrador(borrador) {
 
 function aplicarBorrador(borrador) {
   if (!borrador || typeof borrador !== "object" || Array.isArray(borrador)) return false;
+  $("quote-id").value = String(borrador.id || nuevoUuid());
   $("quote-number").value = String(borrador.numero || nuevaReferencia());
   $("quote-client").value = String(borrador.cliente || "");
   $("quote-tax-id").value = String(borrador.cuit || "");
@@ -859,7 +1078,12 @@ function renderizarArchivados() {
   const contador = $("quote-archive-count");
   if (!destino || !contador) return;
   const archivo = leerLocal(LS_ARCHIVO, []);
-  const lista = Array.isArray(archivo) ? archivo : [];
+  const locales = Array.isArray(archivo) ? archivo : [];
+  const idActual = $("quote-id")?.value;
+  const listaNube = modoRemoto ? presupuestosNube.filter((entrada) => entrada.id !== idActual) : [];
+  const idsNube = new Set(listaNube.map((entrada) => entrada.borrador?.id).filter(Boolean));
+  const listaLocal = locales.filter((entrada) => !idsNube.has(entrada.borrador?.id));
+  const lista = modoRemoto ? [...listaNube, ...listaLocal].slice(0, 100) : locales;
   contador.textContent = String(lista.length);
   destino.replaceChildren();
   if (!lista.length) {
@@ -879,7 +1103,7 @@ function renderizarArchivados() {
     const abrir = document.createElement("button");
     abrir.type = "button";
     abrir.textContent = "Abrir";
-    abrir.addEventListener("click", () => {
+    abrir.addEventListener("click", async () => {
       const actual = obtenerBorrador();
       if (borradorTieneContenido(actual) && !archivarBorrador(actual)) {
         $("quote-status").textContent = "No pude guardar el borrador actual; no lo reemplacé.";
@@ -948,12 +1172,34 @@ function nuevoBorrador() {
   guardarBorrador();
 }
 
-export function iniciarPresupuestos() {
+export async function iniciarPresupuestos({ perfil = null, remoto = false } = {}) {
   if (!$("presupuestos") || !$("quote-items")) return;
+  modoRemoto = remoto;
+  perfilPresupuesto = perfil;
+  catalogoAdmin = !modoRemoto || perfil?.rol === "admin";
+  $("quote-product-form").hidden = modoRemoto && !catalogoAdmin;
+  $("quote-catalog-file").closest("label").hidden = modoRemoto && !catalogoAdmin;
+  $("quote-catalog-clear").hidden = true;
+  $("quote-catalog-share").hidden = true;
+  $("quote-catalog-description").textContent = modoRemoto
+    ? "El catálogo y los presupuestos se comparten entre el personal con sesión iniciada. Los faltantes y la llegada quedan guardados dentro de la app; no se imprimen para el cliente."
+    : "Los precios cargados a mano son netos sin IVA. El CSV de Gestión importa código, descripción, lista 1 con IVA y stock del depósito exportado. El catálogo queda guardado en esta computadora.";
+  const etiquetaCatalogo = document.querySelector("label[for='quote-catalog-search']");
+  if (etiquetaCatalogo) etiquetaCatalogo.textContent = modoRemoto ? "Agregar desde catálogo compartido" : "Agregar desde catálogo local";
+  $("quote-screen-note").textContent = modoRemoto
+    ? "El catálogo y los presupuestos se guardan en Supabase para compartirlos entre computadoras. El stock sigue siendo el corte importado desde Gestión; no se actualiza en vivo ni se modifica Gestión."
+    : "El catálogo y el borrador se guardan en este navegador. El stock llega del último Excel de Gestión que importes; no se actualiza en vivo ni se comparte entre computadoras. La app no modifica stock ni registra una venta.";
   inicializarCampos();
   const borradorRestaurado = cargarBorrador();
   if (!borradorRestaurado) crearFila();
   presupuestoListo = true;
+  if (modoRemoto) await hidratarDatosNube();
+  if (modoRemoto && borradorRestaurado) {
+    const borradorLocal = obtenerBorrador();
+    const borradorEnNube = presupuestosNube.find((entrada) => entrada.id === borradorLocal.id);
+    if (borradorEnNube?.borrador) aplicarBorrador(borradorEnNube.borrador);
+    else if (borradorTieneContenido(borradorLocal)) guardarBorradorEnNube(borradorLocal, true);
+  }
   vincularPresupuestoConCatalogo();
   actualizarCatalogo();
   renderizarArchivados();
@@ -986,18 +1232,71 @@ export function iniciarPresupuestos() {
   $("quote-catalog-template").addEventListener("click", descargarPlantillaCsv);
   $("quote-catalog-export").addEventListener("click", exportarCatalogoCsv);
   $("quote-catalog-clear").addEventListener("click", eliminarCatalogoCompleto);
+  $("quote-catalog-share").addEventListener("click", async () => {
+    if (!catalogoAdmin || !catalogo.length) return;
+    const boton = $("quote-catalog-share");
+    boton.disabled = true;
+    $("quote-catalog-status").textContent = "Compartiendo el catálogo guardado…";
+    try {
+      const meta = leerLocal(LS_CATALOGO_META, {});
+      const primerProducto = catalogo.find((p) => p.deposito || p.fechaStock || p.origen) || {};
+      await supabase.replaceCatalog(catalogo, {
+        nombreArchivo: meta.nombreArchivo || "catalogo-guardado.csv",
+        origen: primerProducto.origen || "Catálogo local",
+        deposito: primerProducto.deposito || "",
+        corteFuente: primerProducto.fechaStock || "",
+      });
+      catalogoEnNube = true;
+      guardarLocal(LS_CATALOGO_NUBE, true);
+      await hidratarDatosNube();
+      actualizarCatalogo();
+      $("quote-catalog-status").textContent = `Catálogo compartido: ${catalogo.length} productos. Ya está disponible para el equipo.`;
+    } catch (error) {
+      $("quote-catalog-status").textContent = `No pude compartir el catálogo: ${error?.message || "error de conexión"}`;
+    } finally {
+      boton.disabled = false;
+      actualizarEstadoCatalogo();
+    }
+  });
   $("quote-catalog-file").addEventListener("change", async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
     try {
       if (file.size > 5 * 1024 * 1024) throw new Error("El CSV supera el límite de 5 MB.");
-      if (catalogo.length && !window.confirm(`Ya hay ${catalogo.length} productos cargados. ¿Reemplazarlos por los del archivo seleccionado? Se quitarán también los productos manuales que no estén en ese archivo; los presupuestos guardados se conservan.`)) {
+      if (catalogo.length && !window.confirm(`Ya hay ${catalogo.length} productos cargados. ¿Reemplazarlos por los del archivo seleccionado? Los presupuestos guardados se conservan.`)) {
         $("quote-catalog-status").textContent = "No se reemplazó el catálogo actual.";
         return;
       }
       const result = importarCsv(await file.text(), { reemplazar: true, nombreArchivo: file.name });
+      if (modoRemoto) {
+        const meta = leerLocal(LS_CATALOGO_META, {});
+        const primerProducto = catalogo.find((p) => p.deposito || p.fechaStock || p.origen) || {};
+        try {
+          await supabase.replaceCatalog(catalogo, {
+            nombreArchivo: file.name,
+            origen: primerProducto.origen || "Gestión CSV",
+            deposito: primerProducto.deposito || "",
+            corteFuente: primerProducto.fechaStock || "",
+          }, result.omitidos);
+          catalogoEnNube = true;
+          guardarLocal(LS_CATALOGO_NUBE, true);
+          await hidratarDatosNube();
+          guardarLocal(LS_CATALOGO_META, {
+            ...meta,
+            nombreArchivo: file.name,
+            importadoEn: new Date().toISOString(),
+            productosImportados: result.importados,
+          });
+        } catch (error) {
+          catalogoEnNube = false;
+          try { localStorage.removeItem(LS_CATALOGO_NUBE); } catch {}
+          actualizarCatalogo();
+          $("quote-catalog-status").textContent = `El archivo quedó guardado en esta computadora, pero no se compartió: ${error?.message || "error de conexión"}`;
+          return;
+        }
+      }
       vincularPresupuestoConCatalogo();
-      $("quote-catalog-status").textContent = `Catálogo reemplazado: ${result.importados} productos${result.omitidos ? `; ${result.omitidos} filas omitidas por datos inválidos` : ""}.${result.metadataGuardada ? " Nombre del archivo registrado; productos guardados en esta computadora." : " Los productos quedaron guardados, pero no pude registrar el nombre del archivo."}`;
+      $("quote-catalog-status").textContent = `Catálogo reemplazado: ${result.importados} productos${result.omitidos ? `; ${result.omitidos} filas omitidas por datos inválidos` : ""}.${modoRemoto ? " Guardado y compartido con el equipo." : result.metadataGuardada ? " Nombre del archivo registrado; productos guardados en esta computadora." : " Los productos quedaron guardados, pero no pude registrar el nombre del archivo."}`;
     } catch (error) {
       $("quote-catalog-status").textContent = error?.message || "No se pudo importar el CSV.";
     } finally {
@@ -1006,6 +1305,16 @@ export function iniciarPresupuestos() {
   });
   window.addEventListener("afterprint", () => document.body.classList.remove("print-quote"));
   if (!guardarLocal(LS_CATALOGO, catalogo)) $("quote-catalog-status").textContent = "El navegador no permite guardar el catálogo local.";
+}
+
+export async function actualizarDatosCompartidos() {
+  if (!modoRemoto) return { ok: false, productos: 0, presupuestos: 0 };
+  const ok = await hidratarDatosNube();
+  if (ok) {
+    actualizarCatalogo();
+    renderizarArchivados();
+  }
+  return { ok, productos: catalogo.length, presupuestos: presupuestosNube.length };
 }
 
 export function crearPresupuestoDesdeIA(items = []) {

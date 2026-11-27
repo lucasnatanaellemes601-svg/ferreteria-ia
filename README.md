@@ -5,8 +5,8 @@ Herramienta de mostrador. El vendedor mantiene apretado un botón (**push-to-tal
 productos clasificados como **faltante**, **venta** o **consulta**. El vendedor revisa; la IA nunca
 toca stock ni precios por su cuenta.
 
-> Estado: **Fase 1 (piloto)**. Funciona sin base de datos. El objetivo es medir si la IA entiende
-> bien el mostrador real *antes* de construir el resto.
+> Estado: piloto de mostrador con conexión opcional a Supabase para usuarios, catálogo y presupuestos.
+> No registra ventas ni modifica stock; la integración con Gestión sigue pendiente.
 
 ## Qué hay en la carpeta
 
@@ -28,7 +28,9 @@ ferreteria-ia/
 │  ├─ catalogo-local.md   Carga de productos para presupuestar sin Gestión
 │  └─ integraciones/gestion.md  Requisitos para la futura API
 ├─ supabase/
-│  └─ schema.sql          Base de datos completa (Fase 2). Un solo script.
+│  ├─ schema.sql          Esquema base de Supabase.
+│  └─ migrations/
+│     └─ 20261127_app_sync.sql  Sincronización del catálogo y presupuestos.
 ├─ .cursor/rules/
 │  └─ ferreteria.mdc      Contexto fijo para Cursor
 ├─ .env.example           Variables de entorno (copiar a .env.local)
@@ -38,9 +40,9 @@ ferreteria-ia/
 
 ## Presupuestos (piloto)
 
-La pantalla permite armar e imprimir un presupuesto con logo, datos del cliente, artículos, IVA, totales, condiciones y estado de stock. Ante un pedido explícito, la IA arma el borrador con los productos y cantidades reconocidos.
+La pantalla permite armar e imprimir un presupuesto con logo, datos del cliente, artículos, IVA, totales, condiciones y estado interno de stock. Ante un pedido explícito, la IA arma el borrador con los productos y cantidades reconocidos.
 
-El catálogo admite carga manual e importación CSV de Gestión. La app guarda el catálogo y un borrador activo en el almacenamiento local del navegador. Exportá el catálogo para tener una copia. Estos datos no se comparten entre computadoras ni se sincronizan en vivo con Gestión. Cada presupuesto debe revisarse antes de imprimir; el módulo no registra ventas ni modifica stock.
+Sin Supabase, el catálogo y el borrador activo quedan en el navegador. Con Supabase configurado, el catálogo y los presupuestos se comparten entre el personal que inició sesión. Exportá una copia del catálogo periódicamente. Cada presupuesto debe revisarse antes de imprimir; el módulo no registra ventas ni modifica stock.
 
 Instrucciones de carga inicial: `docs/catalogo-local.md`.
 
@@ -71,7 +73,7 @@ cp .env.example .env.local
 | `GEMINI_API_KEY` | La clave de Google AI Studio |
 | `GEMINI_MODEL` | Un modelo Flash vigente. Confirmá el nombre en la [doc de modelos](https://ai.google.dev/gemini-api/docs/models): cambia seguido |
 | `APP_PIN` | Un PIN largo que inventes vos. Protege tu cuota de Gemini |
-| `SUPABASE_URL`, `SUPABASE_ANON_KEY` | **Vacías** hasta la Fase 2 |
+| `SUPABASE_URL`, `SUPABASE_ANON_KEY` | Vacías para usar solo el piloto local; ambas completas para activar login y sincronización |
 
 **4. Probalo en tu compu:**
 
@@ -107,27 +109,43 @@ En Vercel: *Add New → Project → importá el repo* y cargá las mismas variab
 Si el porcentaje es bajo por culpa del *dictado* (no de la IA), probá Groq/Whisper antes de seguir.
 Si es bajo por culpa de la *interpretación*, agregá ejemplos reales al prompt.
 
-## Fase 2: Supabase
+## Supabase: catálogo y presupuestos compartidos
 
-No lo hagas hasta que el piloto dé bien.
+La app ya incluye inicio de sesión, catálogo compartido y borradores de presupuesto sincronizados. El
+stock compartido es una foto del último CSV de Gestión: no consulta Gestión en vivo ni modifica sus
+existencias. El botón **Actualizar datos** trae cambios de catálogo y presupuestos cuando se usa otra
+computadora. Los borradores abiertos se guardan automáticamente; evitá editar el mismo borrador a la vez
+desde dos computadoras porque gana el último guardado.
 
-1. Creá un proyecto en [supabase.com](https://supabase.com) (región **São Paulo**).
-2. *SQL Editor → New query* → pegá todo `supabase/schema.sql` → *Run*. Es para un proyecto **nuevo**: no
-   lo corras dos veces.
-3. *Authentication → Sign In / Providers*: **desactivá el registro abierto** y creá los usuarios a mano
-   (*Authentication → Users*). Si no, cualquiera que se registre entra como vendedor.
-4. Hacé admin a tu usuario ejecutando la última línea del script (reemplazá el email).
-5. Cargá productos y proveedores (en la Fase 3 va el importador de CSV para Supabase; el CSV local de presupuestos no carga la base).
-6. **Recién entonces** completá `SUPABASE_URL` y `SUPABASE_ANON_KEY` en Vercel. Nunca cargues la
-   `service_role` en ningún lado.
+El proyecto ya tiene aplicado `supabase/schema.sql`. Para habilitar la sincronización, falta ejecutar
+una vez el SQL de `supabase/migrations/20261127_app_sync.sql` desde *Supabase → SQL Editor → New query*.
+Esta migración agrega el contenido completo del borrador y habilita que cualquier persona autenticada del
+equipo pueda continuar un presupuesto en estado borrador.
 
-Qué incluye el esquema: 8 tablas con RLS activado en todas, perfiles ligados a Supabase Auth, búsqueda
-difusa de productos (`buscar_productos_similares`, umbral 0.4), alias coloquiales que el vendedor puede
-agregar, historial automático de precios, `registrar_venta()` (precios y stock siempre desde la base) y
-la vista `reporte_ventas_vs_faltantes`.
+Después:
 
-> Pendiente para la Fase 2: la pantalla todavía **no tiene login**. Cursor ya sabe cómo seguir
-> (leé `.cursor/rules/ferreteria.mdc`).
+1. En *Authentication → Users*, creá manualmente los usuarios para vos y los vendedores. Mantené
+   desactivados los registros públicos.
+2. Hacé admin al primer usuario ejecutando esta línea en SQL Editor, con su correo real:
+
+   ```sql
+   UPDATE public.usuarios SET rol = 'admin' WHERE email = 'tu-correo@ejemplo.com';
+   ```
+
+3. En Vercel → *Project → Settings → Environment Variables*, cargá `SUPABASE_URL` (Project URL) y
+   `SUPABASE_ANON_KEY` (la clave pública anon/publishable del proyecto). Agregalas a los entornos que
+   uses y redeployá después del próximo `git push`.
+4. En desarrollo local, colocá esas mismas dos variables en `.env.local` y arrancá `npm run dev`.
+
+La clave `anon`/publishable es pública y está protegida por las políticas RLS de la base. **No uses
+`service_role` ni la publiques en el navegador, Vercel o GitHub.** Una vez configuradas las variables, la
+app muestra el login de Supabase y deja de pedir el PIN. La sincronización funciona después de desplegar
+el código; los cambios locales todavía no están publicados en Vercel.
+
+Para compartir el catálogo de 6.449 artículos que ya está guardado en una computadora, iniciá sesión con
+el administrador en esa misma computadora y tocá **Compartir catálogo guardado**. Los vendedores podrán
+consultar el catálogo y guardar presupuestos, pero solo el administrador puede importar, editar o eliminar
+productos.
 
 ## Seguridad y privacidad
 
@@ -139,7 +157,7 @@ la vista `reporte_ventas_vs_faltantes`.
   identificar al vendedor. Explicá este flujo al personal antes de usarlo.
 - **Plan gratuito de Gemini:** revisá los términos vigentes. En el nivel gratuito Google puede usar el
   contenido enviado para mejorar sus productos. Si no querés eso, pasá a un plan pago.
-- El PIN se guarda en el navegador y es una protección provisoria hasta que exista el login de la Fase 2.
+- El PIN se usa solo en modo piloto sin Supabase. Al configurar ambas variables de Supabase, se exige login y el PIN deja de usarse.
 
 ## Límites conocidos
 
@@ -154,7 +172,7 @@ la vista `reporte_ventas_vs_faltantes`.
 |---|---|
 | "Falta configurar el servidor" | Faltan `GEMINI_API_KEY` o `APP_PIN` en `.env.local` / Vercel |
 | "PIN incorrecto" | No coincide con `APP_PIN`. Tocá "Cambiar PIN" |
-| "Login requerido" | Cargaste `SUPABASE_URL` y `SUPABASE_ANON_KEY` antes de la Fase 2 |
+| "Login requerido" | Supabase está activado; iniciá sesión con un usuario creado en Authentication → Users |
 | "La IA no respondió" | Nombre de modelo en `GEMINI_MODEL` que ya no existe o está caído |
 | El botón no escucha | Permiso de micrófono bloqueado, o navegador sin Web Speech (usá Chrome/Edge) |
 | Funciona local pero no en Vercel | Variables de entorno sin cargar en Vercel, o sin redesplegar después de cargarlas |

@@ -70,16 +70,45 @@ CREATE TABLE public.proveedores (
     activo              BOOLEAN NOT NULL DEFAULT TRUE
 );
 
+-- Cada carga de CSV deja una referencia al archivo y al corte de stock.
+-- Se conserva el historial y solo puede haber una importación marcada como actual.
+CREATE TABLE public.importaciones_catalogo (
+    id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    nombre_archivo        TEXT NOT NULL,
+    origen                TEXT NOT NULL DEFAULT 'Gestión CSV',
+    deposito              TEXT,
+    corte_fuente          TEXT,
+    productos_importados  INT NOT NULL DEFAULT 0 CHECK (productos_importados >= 0),
+    productos_omitidos    INT NOT NULL DEFAULT 0 CHECK (productos_omitidos >= 0),
+    estado                TEXT NOT NULL DEFAULT 'actual' CHECK (estado IN ('actual', 'reemplazada')),
+    importado_por         UUID REFERENCES public.usuarios(id) ON DELETE SET NULL,
+    importado_en          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX importaciones_catalogo_una_actual
+    ON public.importaciones_catalogo (estado) WHERE estado = 'actual';
+
 CREATE TABLE public.productos (
-    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    codigo_barras TEXT UNIQUE,
-    nombre        TEXT NOT NULL,
-    categoria     TEXT,
-    stock_actual  INT NOT NULL DEFAULT 0 CHECK (stock_actual >= 0),
-    stock_minimo  INT NOT NULL DEFAULT 5 CHECK (stock_minimo >= 0),
-    precio_venta  NUMERIC(10,2) NOT NULL CHECK (precio_venta >= 0),
-    proveedor_id  UUID REFERENCES public.proveedores(id) ON DELETE SET NULL,
-    activo        BOOLEAN NOT NULL DEFAULT TRUE
+    id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    codigo                   TEXT UNIQUE,
+    codigo_barras            TEXT UNIQUE,
+    nombre                   TEXT NOT NULL,
+    categoria                TEXT,
+    unidad                   TEXT,
+    precio_sin_iva           NUMERIC(12,2) CHECK (precio_sin_iva >= 0),
+    iva_alicuota             NUMERIC(4,2) CHECK (iva_alicuota BETWEEN 0 AND 100),
+    precio_lista1_con_iva    NUMERIC(12,2) CHECK (precio_lista1_con_iva >= 0),
+    codigo_iva               TEXT,
+    precio_venta             NUMERIC(12,2) CHECK (precio_venta >= 0),
+    stock_actual             NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (stock_actual >= 0),
+    stock_minimo             NUMERIC(12,2) NOT NULL DEFAULT 5 CHECK (stock_minimo >= 0),
+    stock_gestion            NUMERIC(12,2),
+    estado_stock_gestion     TEXT,
+    deposito_gestion         TEXT,
+    corte_stock_gestion      TEXT,
+    origen_datos             TEXT,
+    importacion_id           UUID REFERENCES public.importaciones_catalogo(id) ON DELETE SET NULL,
+    proveedor_id             UUID REFERENCES public.proveedores(id) ON DELETE SET NULL,
+    activo                   BOOLEAN NOT NULL DEFAULT TRUE
 );
 
 -- Nombres coloquiales ("poxi", "poxipol", "tarugo del 8") → producto real.
@@ -148,6 +177,45 @@ CREATE TABLE public.ventas (
     fecha       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Presupuestos compartidos entre el personal autenticado. Los campos de stock,
+-- faltante y llegada son internos; la impresión al cliente los omite en frontend.
+CREATE TABLE public.presupuestos (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    numero           TEXT NOT NULL UNIQUE,
+    cliente          TEXT NOT NULL DEFAULT '',
+    cuit_dni         TEXT,
+    contacto         TEXT,
+    vendedor         TEXT,
+    creado_por       UUID NOT NULL DEFAULT auth.uid() REFERENCES public.usuarios(id),
+    fecha            DATE NOT NULL DEFAULT CURRENT_DATE,
+    valido_hasta     DATE,
+    observaciones    TEXT,
+    estado           TEXT NOT NULL DEFAULT 'borrador'
+                     CHECK (estado IN ('borrador', 'emitido', 'aceptado', 'rechazado', 'vencido')),
+    total            NUMERIC(14,2) NOT NULL DEFAULT 0 CHECK (total >= 0),
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE public.detalle_presupuestos (
+    id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    presupuesto_id           UUID NOT NULL REFERENCES public.presupuestos(id) ON DELETE CASCADE,
+    producto_id              UUID REFERENCES public.productos(id) ON DELETE SET NULL,
+    codigo_snapshot          TEXT NOT NULL DEFAULT '',
+    descripcion_snapshot     TEXT NOT NULL,
+    cantidad                 NUMERIC(12,2) NOT NULL CHECK (cantidad > 0),
+    unidad                   TEXT NOT NULL DEFAULT '',
+    precio_unitario          NUMERIC(12,2) NOT NULL CHECK (precio_unitario >= 0),
+    iva_alicuota             NUMERIC(4,2) CHECK (iva_alicuota BETWEEN 0 AND 100),
+    precio_incluye_iva       BOOLEAN NOT NULL DEFAULT FALSE,
+    subtotal                 NUMERIC(14,2) NOT NULL CHECK (subtotal >= 0),
+    stock_gestion_snapshot   NUMERIC(12,2),
+    estado_stock_snapshot    TEXT,
+    faltante_interno         BOOLEAN NOT NULL DEFAULT FALSE,
+    llegada_interna          TEXT,
+    created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE public.detalle_ventas (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     venta_id        UUID NOT NULL REFERENCES public.ventas(id) ON DELETE CASCADE,
@@ -171,7 +239,7 @@ DECLARE
   v_item     JSONB;
   v_prod     UUID;
   v_cant     INT;
-  v_precio   NUMERIC(10,2);
+  v_precio   NUMERIC(12,2);
   v_total    NUMERIC(12,2) := 0;
 BEGIN
   IF auth.uid() IS NULL THEN
@@ -197,6 +265,9 @@ BEGIN
 
     IF NOT FOUND THEN
       RAISE EXCEPTION 'Sin stock suficiente o producto inexistente: %', v_prod;
+    END IF;
+    IF v_precio IS NULL THEN
+      RAISE EXCEPTION 'El producto % no tiene precio de venta cargado', v_prod;
     END IF;
 
     INSERT INTO public.detalle_ventas (venta_id, producto_id, cantidad, precio_unitario)
@@ -289,6 +360,11 @@ CREATE INDEX idx_detalle_ventas_venta   ON public.detalle_ventas (venta_id);
 CREATE INDEX idx_ventas_vendedor_fecha  ON public.ventas (vendedor_id, fecha DESC);
 CREATE INDEX idx_productos_proveedor    ON public.productos (proveedor_id);
 CREATE INDEX idx_alias_producto         ON public.alias_productos (producto_id);
+CREATE INDEX idx_productos_importacion  ON public.productos (importacion_id);
+CREATE INDEX idx_importaciones_fecha    ON public.importaciones_catalogo (importado_en DESC);
+CREATE INDEX idx_presupuestos_creado    ON public.presupuestos (creado_por, created_at DESC);
+CREATE INDEX idx_presupuestos_estado    ON public.presupuestos (estado, created_at DESC);
+CREATE INDEX idx_detalle_presupuesto    ON public.detalle_presupuestos (presupuesto_id);
 
 -- ---------------------------------------------------------------------
 -- 7. ROW LEVEL SECURITY — activado en TODAS las tablas
@@ -302,6 +378,9 @@ ALTER TABLE public.precios_historicos ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.registro_faltantes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.ventas             ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.detalle_ventas     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.importaciones_catalogo ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.presupuestos       ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.detalle_presupuestos ENABLE ROW LEVEL SECURITY;
 
 -- Usuarios: admin ve y gestiona todo; cada uno se lee a sí mismo.
 -- Nadie (salvo admin) puede cambiar roles.
@@ -313,6 +392,12 @@ CREATE POLICY usuarios_self_read  ON public.usuarios FOR SELECT TO authenticated
 -- Catálogo: todos los logueados leen, solo admin escribe.
 CREATE POLICY productos_read   ON public.productos   FOR SELECT TO authenticated USING (true);
 CREATE POLICY productos_admin  ON public.productos   FOR ALL    TO authenticated
+  USING (public.es_admin()) WITH CHECK (public.es_admin());
+
+-- Las importaciones se pueden consultar internamente; solo admin las reemplaza o elimina.
+CREATE POLICY importaciones_read ON public.importaciones_catalogo FOR SELECT TO authenticated
+  USING (true);
+CREATE POLICY importaciones_admin ON public.importaciones_catalogo FOR ALL TO authenticated
   USING (public.es_admin()) WITH CHECK (public.es_admin());
 
 CREATE POLICY proveedores_read  ON public.proveedores FOR SELECT TO authenticated USING (true);
@@ -358,6 +443,43 @@ CREATE POLICY detalle_read_own ON public.detalle_ventas FOR SELECT TO authentica
 CREATE POLICY detalle_admin    ON public.detalle_ventas FOR ALL TO authenticated
   USING (public.es_admin()) WITH CHECK (public.es_admin());
 
+-- El equipo puede consultar presupuestos compartidos. Cada vendedor escribe
+-- únicamente sus borradores; el admin puede gestionar cualquiera.
+CREATE POLICY presupuestos_read ON public.presupuestos FOR SELECT TO authenticated
+  USING (true);
+CREATE POLICY presupuestos_insert_own ON public.presupuestos FOR INSERT TO authenticated
+  WITH CHECK (creado_por = (SELECT auth.uid()) AND estado = 'borrador');
+CREATE POLICY presupuestos_update_drafts ON public.presupuestos FOR UPDATE TO authenticated
+  USING (estado = 'borrador') WITH CHECK (estado = 'borrador');
+CREATE POLICY presupuestos_admin ON public.presupuestos FOR ALL TO authenticated
+  USING (public.es_admin()) WITH CHECK (public.es_admin());
+
+CREATE POLICY detalle_presupuestos_read ON public.detalle_presupuestos FOR SELECT TO authenticated
+  USING (EXISTS (
+    SELECT 1 FROM public.presupuestos p WHERE p.id = presupuesto_id
+  ));
+CREATE POLICY detalle_presupuestos_insert_drafts ON public.detalle_presupuestos FOR INSERT TO authenticated
+  WITH CHECK (EXISTS (
+    SELECT 1 FROM public.presupuestos p
+    WHERE p.id = presupuesto_id AND p.estado = 'borrador'
+  ));
+CREATE POLICY detalle_presupuestos_update_drafts ON public.detalle_presupuestos FOR UPDATE TO authenticated
+  USING (EXISTS (
+    SELECT 1 FROM public.presupuestos p
+    WHERE p.id = presupuesto_id AND p.estado = 'borrador'
+  ))
+  WITH CHECK (EXISTS (
+    SELECT 1 FROM public.presupuestos p
+    WHERE p.id = presupuesto_id AND p.estado = 'borrador'
+  ));
+CREATE POLICY detalle_presupuestos_delete_drafts ON public.detalle_presupuestos FOR DELETE TO authenticated
+  USING (EXISTS (
+    SELECT 1 FROM public.presupuestos p
+    WHERE p.id = presupuesto_id AND p.estado = 'borrador'
+  ));
+CREATE POLICY detalle_presupuestos_admin ON public.detalle_presupuestos FOR ALL TO authenticated
+  USING (public.es_admin()) WITH CHECK (public.es_admin());
+
 -- ---------------------------------------------------------------------
 -- 8. PERMISOS: el rol anónimo no toca nada; las funciones solo las
 --    ejecutan usuarios logueados (por defecto Postgres las deja públicas).
@@ -365,6 +487,16 @@ CREATE POLICY detalle_admin    ON public.detalle_ventas FOR ALL TO authenticated
 REVOKE ALL ON ALL TABLES    IN SCHEMA public FROM anon;
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM anon;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM anon;
+
+-- Permisos SQL y RLS se complementan: estos GRANT no habilitan acceso anónimo;
+-- las políticas anteriores limitan cada operación de usuarios autenticados.
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.productos, public.importaciones_catalogo,
+  public.presupuestos, public.detalle_presupuestos TO authenticated;
+GRANT SELECT ON public.proveedores, public.alias_productos, public.precios_historicos,
+  public.registro_faltantes, public.ventas, public.detalle_ventas, public.usuarios TO authenticated;
+GRANT INSERT, UPDATE ON public.alias_productos TO authenticated;
+GRANT INSERT, UPDATE ON public.registro_faltantes TO authenticated;
+GRANT SELECT ON public.reporte_ventas_vs_faltantes TO authenticated;
 
 REVOKE ALL ON FUNCTION public.handle_new_user()               FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.registrar_cambio_precio()       FROM PUBLIC, anon, authenticated;

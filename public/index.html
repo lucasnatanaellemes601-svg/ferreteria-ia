@@ -66,6 +66,13 @@
     .acciones { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
     #pin-box { margin-top: 20px; }
     #pin-box label { display: block; font-weight: 600; margin-bottom: 6px; }
+    #auth-main { max-width: 560px; min-height: 50vh; padding-top: 24px; }
+    #auth-main h2 { margin-top: 0; }
+    #auth-main label { display: block; margin-top: 12px; font-weight: 600; }
+    #auth-main input { margin-top: 5px; }
+    #auth-submit { margin-top: 16px; background: var(--accent); color: var(--accent-fg); font-weight: 700; }
+    #auth-status { min-height: 1.5em; margin: 10px 0 0; color: var(--muted); }
+    .account-bar { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 14px; }
     footer { padding: 28px 16px 40px; color: var(--muted); font-size: .85rem; }
     [hidden] { display: none !important; }
     @media (prefers-reduced-motion: no-preference) { #ptt { transition: box-shadow .12s, background .12s; } }
@@ -78,7 +85,29 @@
     <p class="sub">Mantené apretado el botón (o la barra espaciadora), dictá y soltá.</p>
   </header>
 
-  <main>
+  <main id="auth-main" hidden>
+    <section class="card" aria-labelledby="auth-title">
+      <h2 id="auth-title">Ingresar a FERRMEL</h2>
+      <p class="muted">Usá el usuario y la contraseña que te creó el administrador.</p>
+      <form id="form-auth">
+        <label for="auth-email">Correo</label>
+        <input id="auth-email" type="email" autocomplete="username" required>
+        <label for="auth-password">Contraseña</label>
+        <input id="auth-password" type="password" autocomplete="current-password" required>
+        <button id="auth-submit" type="submit">Ingresar</button>
+        <p id="auth-status" role="status" aria-live="polite"></p>
+      </form>
+    </section>
+  </main>
+
+  <main id="app-main" hidden>
+    <section id="account-box" class="card account-bar" hidden>
+      <span id="account-label"></span>
+      <span id="account-status" role="status" aria-live="polite"></span>
+      <button id="refresh-shared-data" type="button">Actualizar datos</button>
+      <button id="auth-logout" type="button">Cerrar sesión</button>
+    </section>
+
     <section id="pin-box" class="card" hidden>
       <form id="form-pin">
         <label for="pin">PIN de acceso</label>
@@ -121,6 +150,7 @@
           <div class="quote-ref-wrap">
             <label for="quote-number">PRESUPUESTO</label>
             <input id="quote-number" aria-label="Número de presupuesto">
+            <input id="quote-id" type="hidden">
           </div>
         </div>
 
@@ -146,7 +176,7 @@
         <details id="quote-catalog-manager" class="quote-catalog-manager no-print">
           <summary>Administrar catálogo local (<span id="quote-catalog-count">0</span>) · <span id="quote-catalog-file-short">sin archivo</span></summary>
           <div class="quote-catalog-content">
-            <p class="muted">Los precios cargados a mano son netos sin IVA. El CSV de Gestión importa código, descripción, lista 1 con IVA y stock del depósito exportado. El catálogo queda guardado en esta computadora; para compartirlo entre computadoras lo conectaremos a Supabase.</p>
+            <p id="quote-catalog-description" class="muted">Los precios cargados a mano son netos sin IVA. El CSV de Gestión importa código, descripción, lista 1 con IVA y stock del depósito exportado. El catálogo queda guardado en esta computadora.</p>
             <form id="quote-product-form" class="quote-product-form">
               <input id="quote-product-id" type="hidden">
               <label>Código<input id="quote-product-code" required autocomplete="off" placeholder="Código o SKU"></label>
@@ -170,6 +200,7 @@
               </div>
             </form>
             <div class="quote-catalog-tools">
+              <button id="quote-catalog-share" type="button" hidden>Compartir catálogo guardado</button>
               <label class="quote-import-label" for="quote-catalog-file">Cargar / cambiar CSV<input id="quote-catalog-file" type="file" accept=".csv,text/csv"></label>
               <button id="quote-catalog-template" type="button">Descargar formato CSV</button>
               <button id="quote-catalog-export" type="button">Exportar catálogo</button>

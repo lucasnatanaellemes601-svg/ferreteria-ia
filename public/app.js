@@ -3,7 +3,8 @@
 // Enrolamiento de voces, Modo Dual (Manual / Portero), texto manual, CSV y métricas.
 // Todo lo que viene del servidor o del dictado se pinta con textContent (nunca innerHTML).
 
-import { agregarProductoAlPresupuesto, crearPresupuestoDesdeIA, iniciarPresupuestos } from "./presupuesto.js";
+import { agregarProductoAlPresupuesto, actualizarDatosCompartidos, crearPresupuestoDesdeIA, iniciarPresupuestos } from "./presupuesto.js";
+import { supabase } from "./supabase.js";
 
 const API = "/api/procesar";
 const LS_PIN = "ferreteria_pin";
@@ -44,6 +45,9 @@ let pin = store.get(LS_PIN) || "";
 let log = cargarLog();
 let textoPendiente = null;
 let enCurso = 0; // envíos al servidor en vuelo
+let modoSupabase = false;
+let perfilActual = null;
+let espacioIniciado = false;
 
 function cargarLog() {
   try {
@@ -237,7 +241,8 @@ function alTerminarGrabacion() {
 
 async function iniciarGrabacion() {
   if (grabando || finalizandoGrabacion) return;
-  if (!pin) { mostrarPin(); setEstado("Primero ingresá el PIN."); return; }
+  if (modoSupabase && !supabase.hasSession()) { mostrarLogin(); setEstado("Primero iniciá sesión."); return; }
+  if (!modoSupabase && !pin) { mostrarPin(); setEstado("Primero ingresá el PIN."); return; }
 
   const listo = await inicializarMic();
   if (!listo) return;
@@ -389,7 +394,13 @@ function blobABase64(blob) {
 async function enviarABackend(blob, mimeType, textoCrudo) {
   const texto = String(textoCrudo || "").replace(/\s+/g, " ").trim();
   if (!blob && texto.length < 2) return;
-  if (!pin) {
+  if (modoSupabase && !supabase.hasSession()) {
+    if (!blob) textoPendiente = texto;
+    mostrarLogin();
+    setEstado("Primero iniciá sesión.");
+    return;
+  }
+  if (!modoSupabase && !pin) {
     if (!blob) textoPendiente = texto;
     mostrarPin();
     setEstado("Primero ingresá el PIN.");
@@ -403,15 +414,22 @@ async function enviarABackend(blob, mimeType, textoCrudo) {
       ? { audioBase64: await blobABase64(blob), mimeType, texto }
       : { texto };
 
+    const authHeaders = modoSupabase
+      ? { Authorization: `Bearer ${await supabase.accessToken()}` }
+      : { "x-app-pin": pin };
     const r = await fetch(API, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "x-app-pin": pin },
+      headers: { "Content-Type": "application/json", ...authHeaders },
       body: JSON.stringify(cuerpo),
     });
     const data = await r.json().catch(() => ({}));
 
     if (!r.ok) {
-      if (data.error === "pin_incorrecto") {
+      if (modoSupabase && (data.error === "login_requerido" || data.error === "sesion_invalida")) {
+        if (!blob) textoPendiente = texto;
+        await supabase.signOut();
+        mostrarLogin();
+      } else if (!modoSupabase && data.error === "pin_incorrecto") {
         pin = "";
         store.del(LS_PIN);
         if (!blob) textoPendiente = texto;
@@ -632,6 +650,78 @@ function descargarCsv() {
 
 // ---------- PIN Y CONTROLES ----------
 function mostrarPin() { $("pin-box").hidden = false; $("pin").focus(); }
+function mostrarLogin() {
+  $("app-main").hidden = true;
+  $("account-box").hidden = true;
+  $("auth-main").hidden = false;
+  $("auth-email").focus();
+}
+
+async function abrirEspacio() {
+  $("auth-main").hidden = true;
+  $("app-main").hidden = false;
+  $("account-box").hidden = !modoSupabase;
+  $("pin-box").hidden = modoSupabase || Boolean(pin);
+  $("cambiar-pin").hidden = modoSupabase;
+  if (modoSupabase) {
+    const persona = perfilActual?.nombre || perfilActual?.email || "Usuario";
+    const rol = perfilActual?.rol === "admin" ? "Administrador" : "Vendedor";
+    $("account-label").textContent = `${persona} · ${rol}`;
+  }
+  if (!espacioIniciado) {
+    espacioIniciado = true;
+    await iniciarPresupuestos({ perfil: perfilActual, remoto: modoSupabase });
+  }
+  if (textoPendiente) {
+    const pendiente = textoPendiente;
+    textoPendiente = null;
+    enviarABackend(null, null, pendiente);
+  }
+}
+
+$("form-auth").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const submit = $("auth-submit");
+  submit.disabled = true;
+  $("auth-status").textContent = "Iniciando sesión…";
+  try {
+    await supabase.signIn($("auth-email").value.trim(), $("auth-password").value);
+    perfilActual = await supabase.getProfile();
+    $("auth-password").value = "";
+    $("auth-status").textContent = "";
+    await abrirEspacio();
+  } catch (error) {
+    $("auth-status").textContent = error?.message || "No pude iniciar sesión.";
+  } finally {
+    submit.disabled = false;
+  }
+});
+
+$("auth-logout").addEventListener("click", async () => {
+  mantenerGrabacion = false;
+  autoReiniciar = false;
+  clearTimeout(timerReinicio);
+  detenerGrabacion();
+  await supabase.signOut();
+  window.location.reload();
+});
+
+$("refresh-shared-data").addEventListener("click", async () => {
+  const boton = $("refresh-shared-data");
+  const estado = $("account-status");
+  boton.disabled = true;
+  estado.textContent = "Actualizando catálogo y presupuestos…";
+  try {
+    const resultado = await actualizarDatosCompartidos();
+    estado.textContent = resultado.ok
+      ? `Actualizado: ${resultado.productos} productos y ${resultado.presupuestos} presupuestos.`
+      : "No pude actualizar. Revisá la conexión y volvé a intentar.";
+  } catch (error) {
+    estado.textContent = error?.message || "No pude actualizar los datos compartidos.";
+  } finally {
+    boton.disabled = false;
+  }
+});
 
 $("form-pin").addEventListener("submit", (e) => {
   e.preventDefault();
@@ -663,7 +753,6 @@ $("borrar").addEventListener("click", () => {
 });
 
 // ---------- ARRANQUE ----------
-if (!pin) mostrarPin();
 if (!SR) {
   setEstado("Este navegador no tiene dictado nativo. Podés grabar audio (modo manual) o escribir abajo.");
   const det = $("manual");
@@ -671,4 +760,29 @@ if (!SR) {
 }
 pintarBoton();
 render();
-iniciarPresupuestos();
+
+async function iniciarApp() {
+  modoSupabase = await supabase.initialize();
+  if (!modoSupabase) {
+    perfilActual = null;
+    await abrirEspacio();
+    if (!pin) mostrarPin();
+    return;
+  }
+  $("pin-box").hidden = true;
+  $("cambiar-pin").hidden = true;
+  if (!supabase.hasSession()) {
+    mostrarLogin();
+    return;
+  }
+  try {
+    perfilActual = await supabase.getProfile();
+    await abrirEspacio();
+  } catch (error) {
+    await supabase.signOut();
+    $("auth-status").textContent = error?.message || "La sesión no está lista; iniciá sesión de nuevo.";
+    mostrarLogin();
+  }
+}
+
+iniciarApp();
