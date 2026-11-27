@@ -323,7 +323,7 @@ function catalogoCoincidente(nombre, detalle = "") {
   if (coincidenciasExactas.length > 1) return null;
 
   const stopWords = new Set(["de", "del", "para", "por", "con", "el", "la", "los", "las", "un", "una", "y", "pulg", "pulgada", "pulgadas", "mm", "cm", "m", "metro", "metros", "unidad", "unidades"]);
-  const terminos = buscado.split(" ").filter((t) => t.length > 1 && !stopWords.has(t));
+  const terminos = buscado.split(" ").filter((t) => t.length > 1 && !stopWords.has(t)).map((t) => t === "pp" ? "ppn" : t);
   if (!terminos.length) return null;
   const candidatas = catalogo.filter((p) => {
     const texto = new Set(normalizarClave(`${p.descripcion} ${p.alias || ""}`).split(" "));
@@ -862,8 +862,23 @@ function validarAntesDeImprimir() {
   }
   const incompleto = rows.find((row) => !row.descripcion || !row.cantidadTexto || !Number.isFinite(row.cantidad) || row.cantidad <= 0 || row.precioTexto === "" || !Number.isFinite(row.precio) || row.precio < 0 || row.iva === "");
   if (incompleto) {
-    $("quote-status").textContent = "Revisá cada artículo: descripción, cantidad, precio e IVA son obligatorios.";
-    incompleto.tr.querySelector("input[aria-label='Artículo o descripción']").focus();
+    const faltantes = [];
+    if (!incompleto.descripcion) faltantes.push("descripción");
+    if (!incompleto.cantidadTexto || !Number.isFinite(incompleto.cantidad) || incompleto.cantidad <= 0) faltantes.push("cantidad");
+    if (incompleto.precioTexto === "" || !Number.isFinite(incompleto.precio) || incompleto.precio < 0) faltantes.push("precio");
+    if (incompleto.iva === "") faltantes.push("IVA");
+    const datos = faltantes.length > 1
+      ? `${faltantes.slice(0, -1).join(", ")} e ${faltantes[faltantes.length - 1]}`
+      : faltantes[0];
+    $("quote-status").textContent = `No se imprimió: a “${incompleto.descripcion || "este artículo"}” le falta ${datos}.`;
+    const campo = !incompleto.descripcion
+      ? incompleto.tr.querySelector("input[aria-label='Artículo o descripción']")
+      : !incompleto.cantidadTexto || !Number.isFinite(incompleto.cantidad) || incompleto.cantidad <= 0
+        ? incompleto.tr.querySelector("input[aria-label='Cantidad']")
+        : incompleto.precioTexto === "" || !Number.isFinite(incompleto.precio) || incompleto.precio < 0
+          ? incompleto.tr.querySelector("input[aria-label='Precio unitario']")
+          : incompleto.tr.querySelector("select");
+    campo?.focus();
     return false;
   }
   for (const row of Array.from($("quote-items").rows)) {
