@@ -30,7 +30,7 @@ const PALABRAS_CLAVE = [
   "no hay", "no tengo", "no me quedan", "se terminó", "falta", "faltó", "sin stock", "agotado", "no quedó",
   "vendí", "se llevó", "le cobré", "le di", "facturé",
   "dame", "me das", "tenés", "tienen", "busco", "buscaba", "necesito", "quiero", "llevo", "me llevo", "te pido",
-  "cuánto", "precio", "sale", "vale", "presupuesto", "cotizame", "cobrame",
+  "cuánto", "precio", "sale", "vale", "presupuesto", "presupuestame", "cotizame", "cotizacion", "cotizar", "cobrame", "armame", "haceme",
   "kilo", "metro", "litro", "bolsa", "caja", "paquete", "unidad", "pulgada", "milímetro", "centímetro", "docena", "par", "lata", "pomo",
 ];
 
@@ -93,11 +93,11 @@ const divEnrolar = el("div", { style: "text-align: center; margin-bottom: 15px;"
         if ($("switch-modo")) $("switch-modo").checked = false;
       }
       setEstado(modoEnrolamiento
-        ? "MODO ENROLAR: mantené apretado y hablá natural al menos 10 segundos."
+        ? "MODO MUESTRA: mantené apretado y hablá natural por al menos 10 segundos. Al soltar se descarga un audio; no se sube ni se activa solo."
         : "Modo mostrador normal.");
       pintarBoton();
     },
-  }, "👤 Activar/Desactivar Enrolamiento"),
+  }, "👤 Muestra de voz (descarga local)"),
 );
 ptt.parentNode.insertBefore(divEnrolar, ptt);
 
@@ -133,7 +133,9 @@ let mantenerGrabacion = false;
 let autoReiniciar = false;
 let timerReinicio = null;
 let timerCorte = null;
+let timerFinVoz = null;
 let inicioGrabacion = 0;
+let huboVozEnTramo = false;
 
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let reconocedor = SR ? new SR() : null;
@@ -144,7 +146,7 @@ function pintarBoton() {
   ptt.setAttribute("aria-pressed", String(grabando));
   ptt.classList.toggle("grabando", grabando);
   let t;
-  if (modoEnrolamiento) t = grabando ? "🔴 Grabando huella vocal..." : "🎤 Mantené para Enrolar Voz";
+  if (modoEnrolamiento) t = grabando ? "🔴 Grabando muestra de voz..." : "🎤 Mantené para grabar 10 segundos";
   else if (modoAuto) t = grabando || autoReiniciar ? "🔴 Escuchando de fondo (Clic para pausar)" : "🎤 Activar micrófono inteligente";
   else t = grabando ? "🔴 Grabando... soltá al terminar" : "Mantené apretado para hablar";
   $("ptt-texto").textContent = t;
@@ -178,6 +180,7 @@ window.addEventListener("pagehide", () => {
   autoReiniciar = false;
   clearTimeout(timerReinicio);
   clearTimeout(timerCorte);
+  clearTimeout(timerFinVoz);
   if (reconocedor) { try { reconocedor.stop(); } catch { /* nada */ } }
   if (mediaRecorder) {
     mediaRecorder.onstop = null;
@@ -219,7 +222,7 @@ function alTerminarGrabacion() {
   const duracion = Date.now() - inicioGrabacion;
 
   if (modoEnrolamiento) {
-    if (duracion < MIN_ENROLAR_MS) setEstado("⚠️ Grabá al menos 10 segundos para que la huella vocal sirva.");
+    if (duracion < MIN_ENROLAR_MS) setEstado("⚠️ La muestra tiene que durar al menos 10 segundos.");
     else descargarAudioEnrolamiento(audioBlob, extensionDe(mimeGrabacion));
     return;
   }
@@ -230,11 +233,15 @@ function alTerminarGrabacion() {
     return;
   }
 
-  // Portero local: solo manda a la IA lo que pasa el filtro de palabras clave
+  // Portero: el dictado es un filtro rápido. Si el navegador detectó voz pero
+  // transcribió mal o no devolvió texto, se envía ese tramo para analizarlo igual.
   if (txt) {
-    const min = txt.toLowerCase();
-    if (PALABRAS_CLAVE.some((p) => min.includes(p))) enviarABackend(audioBlob, mimeGrabacion, txt);
+    const normalizar = (valor) => valor.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    const min = normalizar(txt);
+    if (huboVozEnTramo || PALABRAS_CLAVE.some((p) => min.includes(normalizar(p))) ) enviarABackend(audioBlob, mimeGrabacion, txt);
     else registrarDescartado(txt);
+  } else if (huboVozEnTramo && duracion >= MIN_MANUAL_MS && audioBlob.size > 0) {
+    enviarABackend(audioBlob, mimeGrabacion, "");
   }
   if (autoReiniciar) timerReinicio = setTimeout(iniciarGrabacion, 300);
 }
@@ -255,6 +262,8 @@ async function iniciarGrabacion() {
   audioChunks = [];
   textoIntermedio = "";
   textoFinal = "";
+  huboVozEnTramo = false;
+  clearTimeout(timerFinVoz);
   inicioGrabacion = Date.now();
   $("transcripcion").textContent = "";
 
@@ -270,14 +279,31 @@ async function iniciarGrabacion() {
         if (ev.results[i].isFinal) tFinal += ev.results[i][0].transcript + " ";
         else tTemp += ev.results[i][0].transcript;
       }
-      if (modoAuto) { textoFinal = tFinal; textoIntermedio = tTemp; }
-      else { textoFinal += tFinal; textoIntermedio = tTemp; }
+      textoFinal += tFinal;
+      textoIntermedio = tTemp;
       $("transcripcion").textContent = (textoFinal + textoIntermedio).trim();
 
       // Portero: cuando termina una frase, corta y evalúa
       if (modoAuto && tFinal.trim() !== "") detenerGrabacion();
     };
-    reconocedor.onerror = () => { /* se ignora: el audio igual se graba */ };
+    reconocedor.onspeechstart = () => { if (modoAuto) huboVozEnTramo = true; };
+    reconocedor.onspeechend = () => {
+      if (!modoAuto || !autoReiniciar || !grabando) return;
+      huboVozEnTramo = true;
+      clearTimeout(timerFinVoz);
+      timerFinVoz = setTimeout(() => {
+        if (modoAuto && autoReiniciar && grabando) detenerGrabacion();
+      }, 650);
+    };
+    reconocedor.onerror = (ev) => {
+      if (!modoAuto || !autoReiniciar || ["aborted", "no-speech"].includes(ev.error)) return;
+      const motivo = ev.error === "not-allowed" || ev.error === "service-not-allowed"
+        ? "El navegador bloqueó el dictado; revisá los permisos del micrófono."
+        : ev.error === "network"
+          ? "El dictado automático perdió conexión; revisá internet."
+          : `El dictado automático falló (${ev.error}).`;
+      setEstado(`${motivo} Si detectó habla, voy a enviar el audio para analizarlo igualmente.`);
+    };
     try { reconocedor.start(); }
     catch { setTimeout(() => { try { reconocedor.start(); } catch { /* nada */ } }, 300); }
   }
@@ -302,6 +328,7 @@ async function iniciarGrabacion() {
 
 function detenerGrabacion() {
   clearTimeout(timerCorte);
+  clearTimeout(timerFinVoz);
   if (!grabando) {
     if (!finalizandoGrabacion && (!modoAuto || !autoReiniciar)) liberarMicrofono();
     return;
@@ -341,6 +368,13 @@ function alternarAuto() {
     detenerGrabacion();
     pintarBoton();
   } else {
+    if (!reconocedor) {
+      $("switch-modo").checked = false;
+      modoAuto = false;
+      setEstado("El modo automático necesita dictado de voz del navegador. Probá Chrome o Edge; si no, usá modo manual.");
+      pintarBoton();
+      return;
+    }
     autoReiniciar = true;
     iniciarGrabacion();
   }
@@ -377,7 +411,7 @@ function descargarAudioEnrolamiento(blob, ext) {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
-  setEstado(`Audio de ${nombre} descargado. Copialo a la carpeta 'voces' del proyecto y hacé git push.`);
+  setEstado(`Muestra de ${nombre} descargada. Todavía no está activa: un administrador debe agregarla a voces/ y publicar la app. No se guarda en Supabase.`);
 }
 
 // ---------- ENVÍO AL BACKEND ----------
