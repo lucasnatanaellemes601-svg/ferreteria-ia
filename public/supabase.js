@@ -268,4 +268,31 @@ export const supabase = {
   async loadQuotes() {
     return rest("presupuestos?select=id,numero,cliente,created_at,updated_at,contenido_borrador&order=updated_at.desc&limit=100");
   },
+
+  async saveActivity(evento) {
+    return rest("rpc/registrar_actividad_mostrador", {
+      method: "POST",
+      body: { p_evento: evento },
+    });
+  },
+
+  async loadActivitiesToday() {
+    const inicio = new Date();
+    inicio.setHours(0, 0, 0, 0);
+    const fin = new Date(inicio);
+    fin.setDate(fin.getDate() + 1);
+    const intervalo = encodeURIComponent(`(created_at.gte.${inicio.toISOString()},created_at.lt.${fin.toISOString()})`);
+    const columnas = [
+      "id", "created_at", "texto_original", "origen", "solicita_presupuesto", "vendedor_nombre",
+      "detalle_actividades_mostrador(id,producto_id,codigo_snapshot,descripcion_snapshot,cantidad,unidad,intencion_ia,estado,similitud_match,stock_gestion_snapshot,stock_estado_snapshot,precio_snapshot)",
+    ].join(",");
+    return rest(`actividades_mostrador?select=${columnas}&and=${intervalo}&order=created_at.desc&detalle_actividades_mostrador.order=orden.asc&limit=250`);
+  },
+
+  async updateActivityItem(itemId, state) {
+    return rest("rpc/actualizar_estado_actividad_item", {
+      method: "POST",
+      body: { p_item_id: itemId, p_estado: state },
+    });
+  },
 };

@@ -48,6 +48,7 @@ let enCurso = 0; // envíos al servidor en vuelo
 let modoSupabase = false;
 let perfilActual = null;
 let espacioIniciado = false;
+let actividadesHoy = [];
 
 function cargarLog() {
   try {
@@ -58,6 +59,165 @@ function cargarLog() {
 function guardarLog() {
   if (!store.set(LS_LOG, JSON.stringify(log))) {
     setEstado("No pude guardar el historial. Descargá el CSV antes de cerrar.");
+  }
+}
+
+function etiquetaEstadoActividad(estado) {
+  return ({
+    consulta: "Consulta",
+    presupuesto: "Presupuesto solicitado",
+    disponible_confirmado: "Disponibilidad confirmada",
+    venta_pendiente: "Posible venta · confirmar",
+    venta_confirmada: "Venta confirmada",
+    faltante_pendiente: "Posible faltante · confirmar",
+    faltante_confirmado: "Faltante confirmado",
+    descartado: "Descartado",
+  })[estado] || "Actividad";
+}
+
+function renderActividadDia() {
+  const resumen = $("activity-summary");
+  const lista = $("activity-list");
+  if (!resumen || !lista) return;
+  resumen.replaceChildren();
+  lista.replaceChildren();
+
+  if (!modoSupabase) {
+    lista.append(el("p", { class: "vacio" }, "El modo piloto guarda datos solo en esta computadora. Al conectar Supabase y aplicar la migración, esta actividad se va a compartir entre vendedores."));
+    return;
+  }
+  const items = actividadesHoy.flatMap((actividad) => actividad.detalle_actividades_mostrador || []);
+  const conteos = [
+    ["consultas", items.filter((item) => item.estado === "consulta").length],
+    ["presupuestos", actividadesHoy.filter((actividad) => actividad.solicita_presupuesto).length],
+    ["disponibilidad", items.filter((item) => item.estado === "disponible_confirmado").length],
+    ["ventas confirmadas", items.filter((item) => item.estado === "venta_confirmada").length],
+    ["faltantes confirmados", items.filter((item) => item.estado === "faltante_confirmado").length],
+    ["pendientes de confirmar", items.filter((item) => ["venta_pendiente", "faltante_pendiente"].includes(item.estado)).length],
+  ];
+  resumen.replaceChildren(...conteos.map(([label, cantidad]) =>
+    el("div", { class: "activity-count" }, el("strong", {}, String(cantidad)), el("span", {}, label)),
+  ));
+
+  if (!actividadesHoy.length) {
+    lista.append(el("p", { class: "vacio" }, "Todavía no hay actividad guardada para hoy."));
+    return;
+  }
+
+  for (const actividad of actividadesHoy) {
+    const hora = new Date(actividad.created_at).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" });
+    const lineas = actividad.detalle_actividades_mostrador || [];
+    const origen = actividad.origen === "audio" ? "Voz" : actividad.origen === "manual" ? "Manual" : "Texto";
+    const tarjeta = el("article", { class: "card activity-entry" },
+      el("div", { class: "cabecera" },
+        el("strong", {}, actividad.solicita_presupuesto ? "Pedido de presupuesto" : "Actividad de mostrador"),
+        el("span", {}, `${actividad.vendedor_nombre || "Vendedor"} · ${origen} · ${hora}`),
+      ),
+      actividad.texto_original ? el("blockquote", {}, actividad.texto_original) : null,
+    );
+    if (lineas.length) {
+      const listaLineas = el("div", { class: "activity-lines" });
+      for (const item of lineas) {
+        const estado = item.estado;
+        const statusClass = ["venta_confirmada", "faltante_confirmado", "disponible_confirmado"].includes(estado)
+          ? "activity-state activity-confirmed"
+          : ["venta_pendiente", "faltante_pendiente"].includes(estado)
+            ? "activity-state activity-pending"
+            : "activity-state";
+        const fila = el("div", { class: "activity-line" },
+          el("div", { class: "activity-line-head" },
+            el("strong", {}, `${item.descripcion_snapshot} × ${item.cantidad}`),
+            item.codigo_snapshot ? el("span", { class: "muted" }, `Código ${item.codigo_snapshot}`) : null,
+            el("span", { class: statusClass }, etiquetaEstadoActividad(estado)),
+          ),
+          item.stock_gestion_snapshot !== null && item.stock_gestion_snapshot !== undefined
+            ? el("p", { class: "muted", style: "margin:6px 0 0;font-size:.82rem" }, `Último stock importado: ${item.stock_gestion_snapshot}${item.unidad ? ` ${item.unidad}` : ""}${item.stock_estado_snapshot ? ` · ${item.stock_estado_snapshot}` : ""}. Confirmá disponibilidad en el mostrador.`)
+            : null,
+        );
+        if (estado !== "presupuesto" && estado !== "descartado") {
+          const id = item.id;
+          const acciones = [
+            ["disponible_confirmado", "Había stock"],
+            ["venta_confirmada", "Confirmar venta"],
+            ["faltante_confirmado", "Confirmar faltante"],
+            ["consulta", "Dejar como consulta"],
+          ];
+          fila.append(el("div", { class: "activity-line-actions" }, ...acciones.map(([valor, texto]) =>
+            el("button", {
+              type: "button",
+              "aria-pressed": String(estado === valor),
+              disabled: estado === valor,
+              onclick: () => cambiarEstadoActividad(id, valor),
+            }, texto),
+          )));
+        }
+        listaLineas.append(fila);
+      }
+      tarjeta.append(listaLineas);
+    }
+    lista.append(tarjeta);
+  }
+}
+
+async function actualizarActividadDelDia({ aviso = true } = {}) {
+  const estado = $("activity-status");
+  if (!modoSupabase) {
+    renderActividadDia();
+    return false;
+  }
+  if (aviso && estado) estado.textContent = "Cargando la actividad compartida…";
+  try {
+    actividadesHoy = await supabase.loadActivitiesToday() || [];
+    renderActividadDia();
+    if (estado) estado.textContent = `Actividad de hoy: ${actividadesHoy.length} registro(s), compartidos con el equipo.`;
+    return true;
+  } catch (error) {
+    actividadesHoy = [];
+    renderActividadDia();
+    if (estado) estado.textContent = `No pude cargar la actividad. Aplicá la migración de Supabase y volvé a actualizar. ${error?.message || ""}`;
+    return false;
+  }
+}
+
+async function guardarActividadCompartida(entrada, data, origen) {
+  const items = (Array.isArray(data.items) ? data.items : []).slice(0, 20).map((item) => {
+    const candidatos = Array.isArray(item.candidatos) ? item.candidatos : [];
+    const mejor = candidatos
+      .filter((candidato) => candidato?.producto_id && Number.isFinite(Number(candidato.similitud)))
+      .sort((a, b) => Number(b.similitud) - Number(a.similitud))[0];
+    const similitud = mejor ? Number(mejor.similitud) : null;
+    return {
+      producto_id: mejor && similitud >= 0.85 ? mejor.producto_id : null,
+      similitud,
+      descripcion: [item.producto_estandarizado, item.medida_o_detalle].filter(Boolean).join(" · ").slice(0, 200),
+      cantidad: Number(item.cantidad) > 0 ? Number(item.cantidad) : 1,
+      unidad: "",
+      intencion_ia: item.intencion,
+    };
+  }).filter((item) => item.descripcion);
+
+  if (!items.length && data.solicita_presupuesto !== true) return;
+  const guardado = await supabase.saveActivity({
+    texto: entrada.texto || "",
+    origen,
+    solicita_presupuesto: data.solicita_presupuesto === true,
+    items,
+  });
+  entrada.actividadId = guardado?.actividad_id || null;
+  entrada.actividadItemIds = Array.isArray(guardado?.items) ? guardado.items.map((item) => item.id) : [];
+  await actualizarActividadDelDia({ aviso: false });
+}
+
+async function cambiarEstadoActividad(itemId, estadoNuevo) {
+  const estado = $("activity-status");
+  if (!itemId || !modoSupabase) return;
+  if (estado) estado.textContent = "Guardando la confirmación…";
+  try {
+    await supabase.updateActivityItem(itemId, estadoNuevo);
+    await actualizarActividadDelDia({ aviso: false });
+    if (estado) estado.textContent = "Confirmación guardada y visible para el equipo.";
+  } catch (error) {
+    if (estado) estado.textContent = `No pude guardar el cambio: ${error?.message || "error de conexión"}`;
   }
 }
 
@@ -474,14 +634,25 @@ async function enviarABackend(blob, mimeType, textoCrudo) {
     }
     if (!Array.isArray(data.items)) { setEstado("Respuesta inesperada del servidor."); return; }
 
-    registrar(texto, data);
+    const entrada = registrar(texto, data);
+    let errorActividad = "";
+    if (modoSupabase && (data.items.length || data.solicita_presupuesto === true)) {
+      try {
+        await guardarActividadCompartida(entrada, data, blob ? "audio" : "texto");
+      } catch (error) {
+        errorActividad = " No se sincronizó la actividad con Supabase; quedó en el historial de esta computadora. Revisá que esté aplicada la migración.";
+        const estadoActividad = $("activity-status");
+        if (estadoActividad) estadoActividad.textContent = `No se guardó la actividad compartida: ${error?.message || "error de conexión"}`;
+      }
+    }
     const presupuestoCreado = data.solicita_presupuesto === true && crearPresupuestoDesdeIA(data.items);
     $("transcripcion").textContent = "";
-    setEstado(presupuestoCreado
+    const mensaje = presupuestoCreado
       ? "Presupuesto preliminar armado. Revisá el catálogo, completá los datos y confirmá antes de imprimir."
       : data.solicita_presupuesto
         ? "Detecté un pedido de presupuesto; mirá el mensaje del módulo para completar el dictado."
-        : data.items.length ? "Listo. Revisá el resultado." : "No detecté productos.");
+        : data.items.length ? "Listo. Revisá el resultado." : "No detecté productos.";
+    setEstado(mensaje + errorActividad);
   } catch {
     if (!blob) {
       $("texto-manual").value = texto;
@@ -502,10 +673,12 @@ function nuevoId(sufijo) {
 }
 
 function registrar(texto, data) {
-  log.unshift({ id: nuevoId("ok"), ts: new Date().toISOString(), texto, data, veredicto: null, descartado: false });
+  const entrada = { id: nuevoId("ok"), ts: new Date().toISOString(), texto, data, veredicto: null, descartado: false };
+  log.unshift(entrada);
   if (log.length > MAX_LOG) log.length = MAX_LOG;
   guardarLog();
   render();
+  return entrada;
 }
 
 function registrarDescartado(texto) {
@@ -705,6 +878,7 @@ async function abrirEspacio() {
   if (!espacioIniciado) {
     espacioIniciado = true;
     await iniciarPresupuestos({ perfil: perfilActual, remoto: modoSupabase });
+    await actualizarActividadDelDia();
   }
   if (textoPendiente) {
     const pendiente = textoPendiente;
@@ -744,11 +918,14 @@ $("refresh-shared-data").addEventListener("click", async () => {
   const boton = $("refresh-shared-data");
   const estado = $("account-status");
   boton.disabled = true;
-  estado.textContent = "Actualizando catálogo y presupuestos…";
+  estado.textContent = "Actualizando catálogo, presupuestos y actividad…";
   try {
     const resultado = await actualizarDatosCompartidos();
-    estado.textContent = resultado.ok
-      ? `Actualizado: ${resultado.productos} productos y ${resultado.presupuestos} presupuestos.`
+    const actividadOk = await actualizarActividadDelDia({ aviso: false });
+    estado.textContent = resultado.ok && actividadOk
+      ? `Actualizado: ${resultado.productos} productos, ${resultado.presupuestos} presupuestos y ${actividadesHoy.length} actividades de hoy.`
+      : resultado.ok
+        ? `Catálogo y presupuestos actualizados; la actividad no se pudo cargar.`
       : "No pude actualizar. Revisá la conexión y volvé a intentar.";
   } catch (error) {
     estado.textContent = error?.message || "No pude actualizar los datos compartidos.";
@@ -756,6 +933,8 @@ $("refresh-shared-data").addEventListener("click", async () => {
     boton.disabled = false;
   }
 });
+
+$("activity-refresh").addEventListener("click", () => actualizarActividadDelDia());
 
 $("form-pin").addEventListener("submit", (e) => {
   e.preventDefault();
@@ -794,6 +973,7 @@ if (!SR) {
 }
 pintarBoton();
 render();
+renderActividadDia();
 
 async function iniciarApp() {
   modoSupabase = await supabase.initialize();
